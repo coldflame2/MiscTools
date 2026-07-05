@@ -17,6 +17,7 @@ import { ExportModal } from './components/ExportModal';
 import { AnalysisView } from './components/AnalysisView';
 import { FilenameParser } from './components/FilenameParser';
 import { CreditsCreator } from './components/CreditsCreator';
+import { ContactSheetsTab } from './components/ContactSheetsTab';
 import type { AcknowledgementRecord, AppStatus, AIFlaggedRecord, ContactSheetStatus, ImageAnalysisResult, ExtractedImage, AIAnalysisStatus, HeaderIndices, ActiveView } from './types';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from "docx";
 import saveAs from "file-saver";
@@ -161,7 +162,7 @@ const App: React.FC = () => {
   const [activeView, setActiveView] = useState<ActiveView>('credits');
   const [headerRowIndex, setHeaderRowIndex] = useState(-1);
   const [columnIndices, setColumnIndices] = useState<HeaderIndices | null>(null);
-  const [activeTab, setActiveTab] = useState<'logReview' | 'newFeature' | 'creditsCreator'>('logReview');
+  const [activeTab, setActiveTab] = useState<'logReview' | 'newFeature' | 'creditsCreator' | 'contactSheets'>('logReview');
 
 
   const handleReset = () => {
@@ -1007,6 +1008,16 @@ const App: React.FC = () => {
           >
             Credits Creator
           </button>
+          <button
+            onClick={() => setActiveTab('contactSheets')}
+            className={`${
+              activeTab === 'contactSheets'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
+            } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium`}
+          >
+            Contact Sheets
+          </button>
         </nav>
       </div>
 
@@ -1050,6 +1061,8 @@ const App: React.FC = () => {
       {activeTab === 'newFeature' && <FilenameParser />}
 
       {activeTab === 'creditsCreator' && <CreditsCreator />}
+
+      {activeTab === 'contactSheets' && <ContactSheetsTab />}
     </main>
   );
 };
