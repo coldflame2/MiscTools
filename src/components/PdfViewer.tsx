@@ -94,8 +94,9 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ url, pageNumber }) => {
         >
           <canvas 
             ref={canvasRef} 
-            className="shadow-xl bg-white" 
+            className="shadow-xl bg-white pl-0 pr-0 pt-0 mt-[10px] ml-[5px] mr-[5px] mb-[10px] w-[800px]" 
             style={{ 
+              width: '800px',
               maxWidth: '100%', 
               maxHeight: '100%', 
               objectFit: 'contain' 

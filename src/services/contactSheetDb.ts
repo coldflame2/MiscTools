@@ -18,6 +18,10 @@ export interface ContactSheetSettings {
   customDate: string;
   minimalRightTitle: string;
   cellBackgroundColor: 'white' | 'transparent' | 'slate-50' | 'slate-100' | 'slate-800' | 'black';
+  headerFontSize?: number;
+  headerColor?: string;
+  headerFontFamily?: string;
+  headerFontWeight?: string;
 }
 
 export interface SheetImage {

@@ -60,10 +60,24 @@ export const generatePdfBlob = async (sheets: any[], settings: any): Promise<Blo
   const ROWS = 5;
   const GAP = 16.24; // ~2% of 812
   
+  const getPdfFont = (family: string) => {
+    const f = (family || '').toLowerCase();
+    if (f.includes('mono') || f.includes('courier')) return 'courier';
+    if (f.includes('times') || f.includes('serif')) return 'times';
+    return 'helvetica';
+  };
+
+  const pdfFontFamily = getPdfFont(settings.headerFontFamily || '');
+  const pdfFontWeight = settings.headerFontWeight === 'bold' || settings.headerFontWeight === '700' || settings.headerFontWeight === '900' ? 'bold' : 'normal';
+  const headerColorRgb = hexToRgb(settings.headerColor || '#000000');
+  const headerFontSize = settings.headerFontSize || 14;
+
   let headerHeight = 0;
   if (settings.headerStyle === 'minimal') headerHeight = 40;
   else if (settings.headerStyle === 'academic') headerHeight = 68;
-  else if (settings.headerStyle === 'custom') headerHeight = 50;
+  else if (settings.headerStyle === 'classic') headerHeight = 80;
+  else if (settings.headerStyle === 'industrial') headerHeight = 75;
+  else headerHeight = 50; // fallback / custom
   
   let footerSpace = settings.showFooter ? 30 : 0;
   const availableHeight = PAGE_HEIGHT - PADDING_TOP - PADDING_BOTTOM - headerHeight - footerSpace;
@@ -92,45 +106,100 @@ export const generatePdfBlob = async (sheets: any[], settings: any): Promise<Blo
 
     // Header
     if (settings.headerStyle === 'minimal') {
-      doc.setFont('arial', 'normal');
-      doc.setFontSize(12);
-      doc.setTextColor(textColorPrimaryRgb.r, textColorPrimaryRgb.g, textColorPrimaryRgb.b);
-      doc.text(cleanFolderName, PADDING_X, currentY + 24);
+      doc.setFont(pdfFontFamily, pdfFontWeight);
+      doc.setFontSize(headerFontSize);
+      doc.setTextColor(headerColorRgb.r, headerColorRgb.g, headerColorRgb.b);
       
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(14);
-      doc.setTextColor(textColorSecondaryRgb.r, textColorSecondaryRgb.g, textColorSecondaryRgb.b);
-      doc.text(settings.minimalRightTitle || 'PHOTO RESEARCH', PAGE_WIDTH - PADDING_X, currentY + 24, { align: 'right' });
+      const leftTitle = cleanFolderName;
+      doc.text(leftTitle, PADDING_X, currentY + 24);
+      
+      const rightTitle = settings.minimalRightTitle || 'Photo Research';
+      doc.text(rightTitle, PAGE_WIDTH - PADDING_X, currentY + 24, { align: 'right' });
 
       currentY += 24 + 8;
       doc.setDrawColor(borderColorRgb.r, borderColorRgb.g, borderColorRgb.b);
       doc.line(PADDING_X, currentY, PAGE_WIDTH - PADDING_X, currentY);
       currentY += 8;
     } else if (settings.headerStyle === 'academic') {
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(18);
-      doc.setTextColor(textColorPrimaryRgb.r, textColorPrimaryRgb.g, textColorPrimaryRgb.b);
-      doc.text(settings.customTitle || '', PADDING_X, currentY + 18);
+      doc.setFont(pdfFontFamily, pdfFontWeight);
+      doc.setFontSize(headerFontSize * 1.3);
+      doc.setTextColor(headerColorRgb.r, headerColorRgb.g, headerColorRgb.b);
+      
+      const mainTitle = cleanFolderName;
+      doc.text(mainTitle, PADDING_X, currentY + 18);
       
       currentY += 18 + 4;
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(12);
+      doc.setFontSize(10);
       doc.setTextColor(textColorSecondaryRgb.r, textColorSecondaryRgb.g, textColorSecondaryRgb.b);
-      doc.text(settings.customSubtitle || '', PADDING_X, currentY + 12);
+      doc.text(settings.customSubtitle || 'Field Analysis & Asset Portfolio', PADDING_X, currentY + 12);
+      
+      // Right block (Folder name & Date)
+      doc.setFont(pdfFontFamily, pdfFontWeight);
+      doc.setFontSize(headerFontSize);
+      doc.setTextColor(headerColorRgb.r, headerColorRgb.g, headerColorRgb.b);
+      doc.text(`Folder: ${cleanFolderName}`, PAGE_WIDTH - PADDING_X, currentY - 6, { align: 'right' });
+      doc.text(`Date: ${settings.customDate || ''}`, PAGE_WIDTH - PADDING_X, currentY + 12, { align: 'right' });
       
       currentY += 12 + 8;
-      doc.setFontSize(10);
-      doc.text(`Folder: ${cleanFolderName}     Date: ${settings.customDate || ''}`, PADDING_X, currentY + 10);
-      
-      currentY += 10 + 8;
       doc.setDrawColor(borderColorRgb.r, borderColorRgb.g, borderColorRgb.b);
       doc.line(PADDING_X, currentY, PAGE_WIDTH - PADDING_X, currentY);
       currentY += 8;
-    } else if (settings.headerStyle === 'custom') {
+    } else if (settings.headerStyle === 'classic') {
+      doc.setFont(pdfFontFamily, pdfFontWeight);
+      doc.setFontSize(headerFontSize * 1.8);
+      doc.setTextColor(headerColorRgb.r, headerColorRgb.g, headerColorRgb.b);
+      
+      const mainTitle = cleanFolderName;
+      doc.text(mainTitle, PAGE_WIDTH / 2, currentY + 24, { align: 'center' });
+      
+      currentY += 24 + 4;
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(12);
+      doc.setTextColor(textColorSecondaryRgb.r, textColorSecondaryRgb.g, textColorSecondaryRgb.b);
+      doc.text(settings.customSubtitle || 'Field Analysis & Asset Portfolio', PAGE_WIDTH / 2, currentY + 12, { align: 'center' });
+      
+      currentY += 12 + 4;
+      doc.setFont(pdfFontFamily, 'normal');
+      doc.setFontSize(headerFontSize);
+      doc.setTextColor(headerColorRgb.r, headerColorRgb.g, headerColorRgb.b);
+      doc.text(`Folder: ${cleanFolderName} | ${settings.customDate || ''}`, PAGE_WIDTH / 2, currentY + 12, { align: 'center' });
+      
+      currentY += 12 + 8;
+      doc.setDrawColor(borderColorRgb.r, borderColorRgb.g, borderColorRgb.b);
+      doc.line(PADDING_X, currentY - 2, PAGE_WIDTH - PADDING_X, currentY - 2);
+      doc.line(PADDING_X, currentY + 1, PAGE_WIDTH - PADDING_X, currentY + 1);
+      currentY += 8;
+    } else if (settings.headerStyle === 'industrial') {
+      doc.setFont(pdfFontFamily, pdfFontWeight);
+      doc.setFontSize(headerFontSize * 2.2);
+      doc.setTextColor(headerColorRgb.r, headerColorRgb.g, headerColorRgb.b);
+      
+      const mainTitle = cleanFolderName;
+      doc.text(mainTitle, PADDING_X, currentY + 30);
+      
+      currentY += 30 + 6;
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(18);
-      doc.setTextColor(textColorPrimaryRgb.r, textColorPrimaryRgb.g, textColorPrimaryRgb.b);
-      doc.text(settings.customTitle || '', PADDING_X, currentY + 18);
+      doc.setFontSize(10);
+      doc.setTextColor(textColorSecondaryRgb.r, textColorSecondaryRgb.g, textColorSecondaryRgb.b);
+      doc.text(settings.customSubtitle || 'Field Analysis & Asset Portfolio', PADDING_X, currentY + 12);
+      
+      // Right block Folder & Date
+      doc.setFont(pdfFontFamily, pdfFontWeight);
+      doc.setFontSize(headerFontSize);
+      doc.setTextColor(headerColorRgb.r, headerColorRgb.g, headerColorRgb.b);
+      doc.text(`Folder: ${cleanFolderName} | ${settings.customDate || ''}`, PAGE_WIDTH - PADDING_X, currentY + 12, { align: 'right' });
+      
+      currentY += 12 + 10;
+      doc.setFillColor(borderColorRgb.r, borderColorRgb.g, borderColorRgb.b);
+      doc.rect(PADDING_X, currentY, PAGE_WIDTH - PADDING_X * 2, 4, 'F');
+      currentY += 8;
+    } else {
+      // fallback/custom
+      doc.setFont(pdfFontFamily, pdfFontWeight);
+      doc.setFontSize(headerFontSize);
+      doc.setTextColor(headerColorRgb.r, headerColorRgb.g, headerColorRgb.b);
+      doc.text(cleanFolderName, PADDING_X, currentY + 18);
       
       currentY += 18 + 4;
       doc.setFont('helvetica', 'normal');

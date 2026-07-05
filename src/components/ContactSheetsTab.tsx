@@ -53,7 +53,11 @@ const DEFAULT_SETTINGS: ContactSheetSettings = {
   customSubtitle: 'Field Analysis & Asset Portfolio',
   customDate: new Date().toLocaleDateString(),
   minimalRightTitle: 'Photo Research',
-  cellBackgroundColor: 'white'
+  cellBackgroundColor: 'white',
+  headerFontSize: 14,
+  headerColor: '#000000',
+  headerFontFamily: 'Calibri, sans-serif',
+  headerFontWeight: 'bold'
 };
 
 const BACKGROUND_COLORS = {
@@ -104,7 +108,11 @@ export const ContactSheetsTab: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isExportDropdownOpen]);
 
-  const generatePreview = async () => {
+  const [autoUpdate, setAutoUpdate] = useState<boolean>(true);
+  const lastSettingsRef = useRef<string>('');
+  const lastSheetsRef = useRef<string>('');
+
+  const generatePreview = useCallback(async () => {
     if (sheets.length === 0) {
       setPreviewPdfUrl(null);
       return;
@@ -118,18 +126,42 @@ export const ContactSheetsTab: React.FC = () => {
         if (prev) URL.revokeObjectURL(prev);
         return url;
       });
+      // Track exactly what we successfully generated
+      lastSettingsRef.current = JSON.stringify(settings);
+      lastSheetsRef.current = JSON.stringify(sheets);
     } catch (e) {
       console.error('Failed to generate preview', e);
     } finally {
       setIsPreviewGenerating(false);
     }
-  };
+  }, [sheets, settings]);
 
   useEffect(() => {
     if (previewMode === 'pdf' && !previewPdfUrl && sheets.length > 0 && !isLoading) {
       generatePreview();
     }
-  }, [previewMode, previewPdfUrl, sheets.length, isLoading]);
+  }, [previewMode, previewPdfUrl, sheets.length, isLoading, generatePreview]);
+
+  // Debounced auto-update for True PDF Preview when settings or sheets change
+  useEffect(() => {
+    if (previewMode !== 'pdf' || !autoUpdate || sheets.length === 0 || isLoading) {
+      return;
+    }
+
+    const currentSettingsStr = JSON.stringify(settings);
+    const currentSheetsStr = JSON.stringify(sheets);
+
+    // If the settings and sheets match what was last generated, do not regenerate
+    if (currentSettingsStr === lastSettingsRef.current && currentSheetsStr === lastSheetsRef.current) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      generatePreview();
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [settings, sheets, autoUpdate, previewMode, isLoading, generatePreview]);
 
   // Sidebar and layout states
   const [isControlsCollapsed, setIsControlsCollapsed] = useState(false);
@@ -1066,16 +1098,6 @@ export const ContactSheetsTab: React.FC = () => {
                 True PDF Preview
               </button>
             </div>
-            {previewMode === 'pdf' && (
-              <button 
-                onClick={generatePreview}
-                disabled={isPreviewGenerating || sheets.length === 0}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-2.5 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-50 flex items-center gap-1.5 shadow-sm h-[32px]"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isPreviewGenerating ? 'animate-spin' : ''}`} />
-                Update
-              </button>
-            )}
           </div>
         </div>
 
@@ -1260,7 +1282,7 @@ export const ContactSheetsTab: React.FC = () => {
             transition={isResizing ? { duration: 0 } : { duration: 0.3, ease: 'easeInOut' }}
             className="border-r border-slate-200 bg-white flex flex-col flex-shrink-0 h-full overflow-hidden"
           >
-            <div className={`p-4 border-b border-slate-200 bg-slate-50/50 flex items-center ${effectiveIsControlsCollapsed ? 'justify-center px-0' : 'justify-between'}`}>
+            <div className={`pl-[16px] pr-4 h-[35px] pt-[10px] pb-[10px] border-b border-slate-200 bg-slate-50/50 flex items-center ${effectiveIsControlsCollapsed ? 'justify-center px-0' : 'justify-between'}`}>
               <span className={`text-xs font-bold tracking-widest text-slate-400 uppercase flex items-center gap-1.5 whitespace-nowrap transition-opacity duration-200 ${effectiveIsControlsCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'}`}>
                 <Sliders className="w-3.5 h-3.5 text-slate-400" />
                 Specification Controls
@@ -1278,22 +1300,175 @@ export const ContactSheetsTab: React.FC = () => {
               className={`flex-grow p-4 space-y-6 overflow-y-auto transition-opacity duration-200 ${effectiveIsControlsCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
               style={{ width: controlsWidth }}
             >
-              {/* Header Right Title Customizer */}
-              <div>
-                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 mb-2">
+              {/* PDF Preview Controls */}
+              <div className="bg-slate-50 rounded-xl p-3 border border-slate-200 flex flex-col gap-2.5 shadow-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5 text-slate-400" />
+                    PDF Preview
+                  </span>
+                  <label className="flex items-center gap-1.5 text-xs text-slate-600 font-semibold cursor-pointer select-none bg-white px-2 py-0.5 rounded border border-slate-200 shadow-2xs">
+                    <input
+                      type="checkbox"
+                      checked={autoUpdate}
+                      onChange={(e) => {
+                        setAutoUpdate(e.target.checked);
+                        if (e.target.checked && previewMode !== 'pdf') {
+                          setPreviewMode('pdf');
+                        }
+                      }}
+                      className="w-3.5 h-3.5 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
+                    />
+                    <span>Live Update</span>
+                  </label>
+                </div>
+                <button 
+                  onClick={async () => {
+                    if (previewMode !== 'pdf') {
+                      setPreviewMode('pdf');
+                    }
+                    await generatePreview();
+                  }}
+                  disabled={isPreviewGenerating || sheets.length === 0}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-50 flex items-center justify-center gap-1.5 shadow-xs h-[32px] cursor-pointer"
+                >
+                  {isPreviewGenerating ? (
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin shrink-0" />
+                  ) : (
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  )}
+                  <span>Update PDF Preview</span>
+                </button>
+              </div>
+
+              {/* Header Titles Customization */}
+              <div className="space-y-3 pt-3 border-t border-slate-100">
+                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
                   <Type className="w-3.5 h-3.5 text-slate-400" />
-                  Header Right Title
+                  Header Content
                 </label>
-                <input
-                  type="text"
-                  placeholder="Photo Research"
-                  value={settings.minimalRightTitle || ''}
-                  onChange={(e) => setSettings(prev => ({ ...prev, minimalRightTitle: e.target.value }))}
-                  className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white text-slate-800"
-                />
-                <span className="text-[10px] text-slate-400 block mt-1">
-                  Customizes the right-aligned header title on minimal layout.
-                </span>
+
+                {/* Right Title */}
+                <div>
+                  <label className="text-xs text-slate-600 mb-1 block">Header Right Title</label>
+                  <input
+                    type="text"
+                    placeholder="Photo Research"
+                    value={settings.minimalRightTitle || ''}
+                    onChange={(e) => setSettings(prev => ({ ...prev, minimalRightTitle: e.target.value }))}
+                    className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white text-slate-800"
+                  />
+                </div>
+
+                {/* Subtitle (Show for styles other than minimal) */}
+                {settings.headerStyle !== 'minimal' && (
+                  <>
+                    <div>
+                      <label className="text-xs text-slate-600 mb-1 block">Subtitle Description</label>
+                      <input
+                        type="text"
+                        placeholder="Field Analysis & Asset Portfolio"
+                        value={settings.customSubtitle || ''}
+                        onChange={(e) => setSettings(prev => ({ ...prev, customSubtitle: e.target.value }))}
+                        className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white text-slate-800"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-slate-600 mb-1 block">Creation Date</label>
+                      <input
+                        type="text"
+                        value={settings.customDate || ''}
+                        onChange={(e) => setSettings(prev => ({ ...prev, customDate: e.target.value }))}
+                        className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white text-slate-800"
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Header Title Font Customization */}
+              <div className="space-y-3 pt-3 border-t border-slate-100">
+                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                  <Sliders className="w-3.5 h-3.5 text-slate-400" />
+                  Header Title Font Styling
+                </label>
+
+                <div>
+                  <label className="text-xs text-slate-600 mb-1 flex justify-between">
+                    <span>Font Size</span>
+                    <span>{settings.headerFontSize || 14}px</span>
+                  </label>
+                  <input
+                    type="range"
+                    min="8"
+                    max="36"
+                    value={settings.headerFontSize || 14}
+                    onChange={(e) => setSettings(prev => ({ ...prev, headerFontSize: parseInt(e.target.value) }))}
+                    className="w-full accent-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs text-slate-600 mb-1 block">Font Family</label>
+                  <select
+                    value={settings.headerFontFamily || 'Calibri, sans-serif'}
+                    onChange={(e) => setSettings(prev => ({ ...prev, headerFontFamily: e.target.value }))}
+                    className="w-full text-xs px-3 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                  >
+                    <option value="Calibri, sans-serif">Calibri</option>
+                    <option value="Inter, sans-serif">Inter</option>
+                    <option value="'JetBrains Mono', monospace">JetBrains Mono</option>
+                    <option value="Arial, sans-serif">Arial</option>
+                    <option value="'Times New Roman', serif">Times New Roman</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs text-slate-600 mb-1 block">Font Weight</label>
+                  <select
+                    value={settings.headerFontWeight || 'bold'}
+                    onChange={(e) => setSettings(prev => ({ ...prev, headerFontWeight: e.target.value }))}
+                    className="w-full text-xs px-3 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                  >
+                    <option value="normal">Normal</option>
+                    <option value="bold">Bold</option>
+                    <option value="100">Thin (100)</option>
+                    <option value="300">Light (300)</option>
+                    <option value="500">Medium (500)</option>
+                    <option value="700">Bold (700)</option>
+                    <option value="900">Black (900)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs text-slate-600 mb-1 flex justify-between items-center">
+                    <span>Font Color</span>
+                    <span className="font-mono text-[10px] text-slate-400 uppercase">{settings.headerColor || '#000000'}</span>
+                  </label>
+                  <div className="flex gap-2 items-center">
+                    <input
+                      type="color"
+                      value={settings.headerColor || '#000000'}
+                      onChange={(e) => setSettings(prev => ({ ...prev, headerColor: e.target.value }))}
+                      className="w-8 h-8 p-0 border-0 rounded cursor-pointer"
+                    />
+                    <div className="flex gap-1 overflow-x-auto pb-1 flex-grow">
+                      {['#000000', '#1e293b', '#64748b', '#ffffff', '#ef4444', '#3b82f6', '#10b981', '#f59e0b'].map(color => (
+                        <button
+                          key={color}
+                          type="button"
+                          onClick={() => setSettings(prev => ({ ...prev, headerColor: color }))}
+                          className={`shrink-0 w-6 h-6 rounded border transition-all ${
+                            (settings.headerColor || '#000000') === color ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200'
+                          }`}
+                          style={{ backgroundColor: color }}
+                          title={color}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
               {/* Labels configuration */}
               <div className="space-y-3 pt-3 border-t border-slate-100">
@@ -1445,42 +1620,7 @@ export const ContactSheetsTab: React.FC = () => {
                 </div>
               </div>
 
-              {/* Header Texts customizing */}
-              {settings.headerStyle !== 'minimal' && (
-                <div className="space-y-3 pt-3 border-t border-slate-100">
-                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Customize Header Content</span>
-                  
-                  <div>
-                    <label className="text-xs text-slate-600 mb-1 block">Title Heading</label>
-                    <input
-                      type="text"
-                      value={settings.customTitle}
-                      onChange={(e) => setSettings(prev => ({ ...prev, customTitle: e.target.value }))}
-                      className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    />
-                  </div>
 
-                  <div>
-                    <label className="text-xs text-slate-600 mb-1 block">Subtitle Description</label>
-                    <input
-                      type="text"
-                      value={settings.customSubtitle}
-                      onChange={(e) => setSettings(prev => ({ ...prev, customSubtitle: e.target.value }))}
-                      className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-xs text-slate-600 mb-1 block">Creation Date</label>
-                    <input
-                      type="text"
-                      value={settings.customDate}
-                      onChange={(e) => setSettings(prev => ({ ...prev, customDate: e.target.value }))}
-                      className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    />
-                  </div>
-                </div>
-              )}
 
               {/* Grid Background presets */}
               <div className="pt-3 border-t border-slate-100">
@@ -1660,30 +1800,108 @@ export const ContactSheetsTab: React.FC = () => {
                   <header className={headerTheme.wrapper}>
                     {settings.headerStyle === 'minimal' ? (
                       <div className="flex justify-between items-baseline w-full">
-                        <span className={headerTheme.title}>
+                        <span 
+                          className={headerTheme.title}
+                          style={{
+                            color: settings.headerColor || '#000000',
+                            fontSize: `${settings.headerFontSize || 14}px`,
+                            fontFamily: settings.headerFontFamily || 'Calibri, sans-serif',
+                            fontWeight: settings.headerFontWeight || 'bold'
+                          }}
+                        >
                           {cleanFolderName}
                         </span>
-                        <span className={headerTheme.subtitle}>
+                        <span 
+                          className={headerTheme.subtitle}
+                          style={{
+                            color: settings.headerColor || '#000000',
+                            fontSize: `${settings.headerFontSize || 14}px`,
+                            fontFamily: settings.headerFontFamily || 'Calibri, sans-serif',
+                            fontWeight: settings.headerFontWeight || 'bold'
+                          }}
+                        >
                           {settings.minimalRightTitle || 'Photo Research'}
                         </span>
                       </div>
                     ) : settings.headerStyle === 'academic' ? (
                       <>
                         <div>
-                          <h4 className={headerTheme.title}>{settings.customTitle}</h4>
+                          <h4 
+                            className={headerTheme.title}
+                            style={{
+                              color: settings.headerColor || '#000000',
+                              fontSize: `${(settings.headerFontSize || 14) * 1.3}px`,
+                              fontFamily: settings.headerFontFamily || 'Calibri, sans-serif',
+                              fontWeight: settings.headerFontWeight || 'bold'
+                            }}
+                          >
+                            {cleanFolderName}
+                          </h4>
                           <p className={headerTheme.subtitle}>{settings.customSubtitle}</p>
                         </div>
-                        <div className={headerTheme.meta}>
+                        <div 
+                          className={headerTheme.meta}
+                          style={{
+                            color: settings.headerColor || '#000000',
+                            fontSize: `${settings.headerFontSize || 14}px`,
+                            fontFamily: settings.headerFontFamily || 'Calibri, sans-serif',
+                            fontWeight: settings.headerFontWeight || 'bold'
+                          }}
+                        >
                           <div><strong>Folder:</strong> {cleanFolderName}</div>
                           <div><strong>Date:</strong> {settings.customDate}</div>
                         </div>
                       </>
+                    ) : settings.headerStyle === 'classic' ? (
+                      <div className="w-full text-center">
+                        <h4 
+                          className={headerTheme.title}
+                          style={{
+                            color: settings.headerColor || '#000000',
+                            fontSize: `${(settings.headerFontSize || 14) * 1.8}px`,
+                            fontFamily: settings.headerFontFamily || 'Calibri, sans-serif',
+                            fontWeight: settings.headerFontWeight || 'bold'
+                          }}
+                        >
+                          {cleanFolderName}
+                        </h4>
+                        <p className={headerTheme.subtitle}>{settings.customSubtitle}</p>
+                        <div 
+                          className={`${headerTheme.meta} mt-2 text-center`}
+                          style={{
+                            color: settings.headerColor || '#000000',
+                            fontSize: `${settings.headerFontSize || 14}px`,
+                            fontFamily: settings.headerFontFamily || 'Calibri, sans-serif',
+                            fontWeight: settings.headerFontWeight || 'normal'
+                          }}
+                        >
+                          Folder: {cleanFolderName} | {settings.customDate}
+                        </div>
+                      </div>
                     ) : (
                       <>
-                        <h4 className={headerTheme.title}>{settings.customTitle}</h4>
+                        <h4 
+                          className={headerTheme.title}
+                          style={{
+                            color: settings.headerColor || '#000000',
+                            fontSize: `${(settings.headerFontSize || 14) * 2.2}px`,
+                            fontFamily: settings.headerFontFamily || 'Calibri, sans-serif',
+                            fontWeight: settings.headerFontWeight || 'bold'
+                          }}
+                        >
+                          {cleanFolderName}
+                        </h4>
                         <div className="flex justify-between items-end">
                           <p className={headerTheme.subtitle}>{settings.customSubtitle}</p>
-                          <span className={headerTheme.meta || 'text-xs text-slate-400 font-mono'}>
+                          <span 
+                            className={headerTheme.meta || 'text-xs text-slate-400 font-mono'}
+                            style={{
+                              color: settings.headerColor || '#000000',
+                              fontSize: `${settings.headerFontSize || 14}px`,
+                              fontFamily: settings.headerFontFamily || 'Calibri, sans-serif',
+                              fontWeight: settings.headerFontWeight || 'bold'
+                            }}
+                          >
                             Folder: {cleanFolderName} | {settings.customDate}
                           </span>
                         </div>
@@ -1834,7 +2052,7 @@ export const ContactSheetsTab: React.FC = () => {
             transition={isResizingSpecs ? { duration: 0 } : { duration: 0.3, ease: 'easeInOut' }}
             className="border-l border-slate-200 bg-white flex flex-col flex-shrink-0 h-full overflow-hidden relative"
           >
-            <div className={`p-4 border-b border-slate-200 bg-slate-50/50 flex items-center ${effectiveIsSpecsCollapsed ? 'justify-center px-0' : 'justify-between'}`}>
+            <div className={`px-4 h-[35px] pt-[10px] pb-[10px] border-b border-slate-200 bg-slate-50/50 flex items-center ${effectiveIsSpecsCollapsed ? 'justify-center px-0' : 'justify-between'}`}>
               <button
                 onClick={() => setIsPagesSidebarCollapsed(!isPagesSidebarCollapsed)}
                 className="p-1 hover:bg-slate-200 rounded text-slate-500 transition-colors cursor-pointer flex items-center justify-center shrink-0"
