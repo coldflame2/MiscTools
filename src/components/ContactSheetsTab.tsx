@@ -40,15 +40,19 @@ const DEFAULT_SETTINGS: ContactSheetSettings = {
   imageFit: 'contain',
   showLabels: true,
   labelFontSize: 10,
-  labelColor: '#334155', // slate-700
+  labelColor: '#000000', // black
+  labelFontFamily: 'Calibri, sans-serif',
+  labelFontWeight: 'normal',
   backgroundCanvas: 'white',
   headerStyle: 'minimal',
-  footerShowPageNumber: true,
-  footerCustomText: 'Research Portfolio — Confidential',
+  showFooter: false,
+  footerShowPageNumber: false,
+  footerCustomText: '',
   customTitle: 'RESEARCH SPECIFICATION SHEET',
   customSubtitle: 'Field Analysis & Asset Portfolio',
   customDate: new Date().toLocaleDateString(),
-  minimalRightTitle: 'Photo Research'
+  minimalRightTitle: 'Photo Research',
+  cellBackgroundColor: 'white'
 };
 
 const BACKGROUND_COLORS = {
@@ -56,6 +60,15 @@ const BACKGROUND_COLORS = {
   black: 'bg-black text-white',
   charcoal: 'bg-slate-900 text-slate-100',
   transparent: 'bg-transparent border-2 border-dashed border-slate-300'
+};
+
+const CELL_BACKGROUND_COLORS = {
+  white: 'bg-white',
+  transparent: 'bg-transparent',
+  'slate-50': 'bg-slate-50',
+  'slate-100': 'bg-slate-100',
+  'slate-800': 'bg-slate-800',
+  black: 'bg-black'
 };
 
 export const ContactSheetsTab: React.FC = () => {
@@ -69,12 +82,60 @@ export const ContactSheetsTab: React.FC = () => {
   const [pdfProgress, setPdfProgress] = useState<{ current: number; total: number } | null>(null);
   const [zipProgress, setZipProgress] = useState<{ current: number; total: number; message: string } | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [isExportDropdownOpen, setIsExportDropdownOpen] = useState(false);
+  const exportDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (exportDropdownRef.current && !exportDropdownRef.current.contains(e.target as Node)) {
+        setIsExportDropdownOpen(false);
+      }
+    };
+    if (isExportDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isExportDropdownOpen]);
 
   // Sidebar and layout states
   const [isControlsCollapsed, setIsControlsCollapsed] = useState(false);
   const [isPagesSidebarCollapsed, setIsPagesSidebarCollapsed] = useState(false);
   const [controlsWidth, setControlsWidth] = useState(320);
   const [isResizing, setIsResizing] = useState(false);
+  const [specsWidth, setSpecsWidth] = useState(256);
+  const [isResizingSpecs, setIsResizingSpecs] = useState(false);
+  const [windowWidth, setWindowWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1200);
+
+  useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Compute effective layout to ensure preview is always visible
+  let effectiveIsControlsCollapsed = isControlsCollapsed;
+  let effectiveIsSpecsCollapsed = isPagesSidebarCollapsed;
+  
+  let effectiveControlsWidth = effectiveIsControlsCollapsed ? 48 : controlsWidth;
+  let effectiveSpecsWidth = effectiveIsSpecsCollapsed ? 48 : specsWidth;
+
+  // The canvas needs a minimum width to display the grid correctly (images disappear if it gets too small)
+  const MAIN_MIN_WIDTH = 700; 
+  let availableForSidebars = windowWidth - MAIN_MIN_WIDTH;
+  
+  if (effectiveControlsWidth + effectiveSpecsWidth > availableForSidebars) {
+    // 1. Collapse Controls
+    effectiveIsControlsCollapsed = true;
+    effectiveControlsWidth = 48;
+  }
+  
+  if (effectiveControlsWidth + effectiveSpecsWidth > availableForSidebars) {
+    // 2. Collapse Specs
+    effectiveIsSpecsCollapsed = true;
+    effectiveSpecsWidth = 48;
+  }
+
   const [loadedIndices, setLoadedIndices] = useState<Record<number, boolean>>({});
 
   const workspaceScrollRef = useRef<HTMLDivElement>(null);
@@ -535,26 +596,50 @@ export const ContactSheetsTab: React.FC = () => {
     setIsResizing(true);
   }, []);
 
+  const startResizingSpecs = useCallback((mouseDownEvent: React.MouseEvent) => {
+    mouseDownEvent.preventDefault();
+    setIsResizingSpecs(true);
+  }, []);
+
   useEffect(() => {
-    if (!isResizing) return;
+    if (!isResizing && !isResizingSpecs) return;
 
     const handleMouseMove = (e: MouseEvent) => {
       const container = document.getElementById('workspace-container');
       if (container) {
         const rect = container.getBoundingClientRect();
-        const newWidth = e.clientX - rect.left;
-        if (newWidth > 240 && newWidth < 550) {
-          setControlsWidth(newWidth);
+        
+        if (isResizing) {
+          const newWidth = e.clientX - rect.left;
+          if (newWidth > 240 && newWidth < 550) {
+            setControlsWidth(newWidth);
+          }
+        }
+        
+        if (isResizingSpecs) {
+          const newWidth = rect.right - e.clientX;
+          if (newWidth > 200 && newWidth < 500) {
+            setSpecsWidth(newWidth);
+          }
         }
       } else {
-        if (e.clientX > 240 && e.clientX < 550) {
-          setControlsWidth(e.clientX);
+        if (isResizing) {
+          if (e.clientX > 240 && e.clientX < 550) {
+            setControlsWidth(e.clientX);
+          }
+        }
+        if (isResizingSpecs) {
+          const newWidth = window.innerWidth - e.clientX;
+          if (newWidth > 200 && newWidth < 500) {
+            setSpecsWidth(newWidth);
+          }
         }
       }
     };
 
     const handleMouseUp = () => {
       setIsResizing(false);
+      setIsResizingSpecs(false);
     };
 
     window.addEventListener('mousemove', handleMouseMove);
@@ -563,7 +648,7 @@ export const ContactSheetsTab: React.FC = () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isResizing]);
+  }, [isResizing, isResizingSpecs]);
 
   // Page selection and smooth scroll helper
   const scrollToPage = (index: number) => {
@@ -724,6 +809,81 @@ export const ContactSheetsTab: React.FC = () => {
       setPdfProgress(null);
     }
   };
+  const handleExportAllZip = async () => {
+    if (specGroups.length === 0) return;
+    
+    // @ts-ignore
+    const html2canvas = window.html2canvas;
+    // @ts-ignore
+    const { jsPDF } = window.jspdf;
+    
+    if (!html2canvas || !jsPDF) {
+      alert("PDF exporting libraries are currently loading. Please wait a few seconds and try again.");
+      return;
+    }
+
+    const JSZip = (await import('jszip')).default;
+    const zip = new JSZip();
+
+    const total = sheets.length;
+    setPdfProgress({ current: 0, total });
+
+    try {
+      let currentProgress = 0;
+
+      for (const group of specGroups) {
+        const groupPdf = new jsPDF({
+          orientation: 'portrait',
+          unit: 'in',
+          format: [12, 12]
+        });
+
+        for (let i = 0; i < group.pages.length; i++) {
+          const page = group.pages[i];
+          setPdfProgress({ current: currentProgress++, total });
+          
+          const domId = `hidden-sheet-canvas-${page.sheetIndex}`;
+          const element = document.getElementById(domId);
+          if (!element) continue;
+
+          const canvas = await html2canvas(element, {
+            scale: 2,
+            useCORS: true,
+            allowTaint: true,
+            backgroundColor: null
+          });
+
+          const imgData = canvas.toDataURL('image/jpeg', 0.95);
+          if (i > 0) {
+            groupPdf.addPage([12, 12], 'portrait');
+          }
+          groupPdf.addImage(imgData, 'JPEG', 0, 0, 12, 12);
+        }
+
+        const filename = group.specName.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+        const pdfBlob = groupPdf.output('blob');
+        zip.file(`contact_sheet_${filename}.pdf`, pdfBlob);
+      }
+      
+      setPdfProgress({ current: total, total });
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = "all_specs.zip";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+    } catch (e) {
+      console.error(e);
+      alert("Failed to render ZIP: " + (e instanceof Error ? e.message : "Unknown error"));
+    } finally {
+      setPdfProgress(null);
+    }
+  };
 
   // Helper styles for presets
   const getHeaderStyle = () => {
@@ -731,35 +891,35 @@ export const ContactSheetsTab: React.FC = () => {
     switch (settings.headerStyle) {
       case 'minimal':
         return {
-          wrapper: `border-b ${isDark ? 'border-slate-800' : 'border-slate-200'} pb-2.5 mb-6`,
+          wrapper: `border-b ${isDark ? 'border-slate-800' : 'border-slate-200'} pb-1.5 mb-2`,
           title: `text-lg font-bold font-sans tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`,
           subtitle: `text-xs font-semibold font-sans tracking-wide uppercase ${isDark ? 'text-slate-400' : 'text-slate-500'}`,
           meta: ``
         };
       case 'classic':
         return {
-          wrapper: `border-b-2 border-double ${isDark ? 'border-slate-700' : 'border-slate-400'} pb-5 mb-6 text-center`,
+          wrapper: `border-b-2 border-double ${isDark ? 'border-slate-700' : 'border-slate-400'} pb-3 mb-3 text-center`,
           title: `text-3xl font-serif font-medium tracking-normal ${isDark ? 'text-white' : 'text-slate-950'}`,
           subtitle: `text-sm italic ${isDark ? 'text-slate-300' : 'text-slate-700'} font-serif mt-1.5`,
           meta: `text-xs font-serif uppercase tracking-widest ${isDark ? 'text-slate-400' : 'text-slate-500'} mt-2`
         };
       case 'academic':
         return {
-          wrapper: `border-t-2 border-b-2 ${isDark ? 'border-slate-100' : 'border-slate-950'} py-4 mb-6 grid grid-cols-2 gap-4 items-center`,
+          wrapper: `border-t-2 border-b-2 ${isDark ? 'border-slate-100' : 'border-slate-950'} py-2 mb-3 grid grid-cols-2 gap-4 items-center`,
           title: `text-xl font-sans font-extrabold tracking-tight ${isDark ? 'text-white' : 'text-slate-950'} text-left uppercase`,
           subtitle: `text-xs font-mono ${isDark ? 'text-slate-400' : 'text-slate-600'} text-left mt-1`,
           meta: `text-xs font-mono ${isDark ? 'text-slate-100' : 'text-slate-900'} text-right space-y-1`
         };
       case 'industrial':
         return {
-          wrapper: `border-b-4 ${isDark ? 'border-white' : 'border-slate-950'} pb-4 mb-6 text-left relative`,
+          wrapper: `border-b-4 ${isDark ? 'border-white' : 'border-slate-950'} pb-2 mb-3 text-left relative`,
           title: `text-4xl font-mono font-black tracking-tighter ${isDark ? 'text-white' : 'text-slate-950'} uppercase`,
           subtitle: `text-sm font-mono font-bold ${isDark ? 'text-slate-950 bg-white' : 'text-slate-800 bg-slate-200'} px-2 py-0.5 inline-block mt-2`,
           meta: `text-xs font-mono font-semibold tracking-wider ${isDark ? 'text-slate-400' : 'text-slate-500'} mt-3 block`
         };
       default:
         return {
-          wrapper: `border-b ${isDark ? 'border-slate-800' : 'border-slate-200'} pb-4 mb-6 text-left`,
+          wrapper: `border-b ${isDark ? 'border-slate-800' : 'border-slate-200'} pb-2 mb-3 text-left`,
           title: `text-xl font-sans font-bold ${isDark ? 'text-white' : 'text-slate-900'}`,
           subtitle: `text-sm ${isDark ? 'text-slate-400' : 'text-slate-500'} mt-1`,
           meta: `text-xs ${isDark ? 'text-slate-500' : 'text-slate-400'} mt-1`
@@ -881,68 +1041,110 @@ export const ContactSheetsTab: React.FC = () => {
 
       {/* Primary Toolbar */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3 py-2 px-4 border-b border-slate-200 bg-white/95 backdrop-blur-sm sticky top-0 z-40">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-1">
           <Layers className="w-5 h-5 text-blue-600" />
           <h2 className="text-base font-bold tracking-tight text-slate-900">
             Contact Sheets Workspace
           </h2>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        {sheets.length > 1 && (
+          <div className="flex items-center justify-center flex-1">
+            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200">
+              <button
+                onClick={() => scrollToPage(Math.max(0, activeSheetIndex - 1))}
+                disabled={activeSheetIndex === 0}
+                className="p-1 rounded text-slate-600 hover:bg-white disabled:opacity-40 disabled:hover:bg-transparent transition-colors cursor-pointer"
+                title="Previous Page"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+              </button>
+              <div className="relative flex items-center">
+                <select
+                  value={activeSheetIndex}
+                  onChange={(e) => scrollToPage(parseInt(e.target.value))}
+                  className="text-xs font-semibold bg-transparent border-none text-slate-700 py-0.5 pl-2 pr-6 focus:outline-none focus:ring-0 cursor-pointer min-w-[120px] max-w-[200px] appearance-none truncate"
+                >
+                  {sheets.map((sheet, index) => (
+                    <option key={sheet.id} value={index}>
+                      Page {index + 1}: {sheet.folderName}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-1.5 pointer-events-none" />
+              </div>
+              <button
+                onClick={() => scrollToPage(Math.min(sheets.length - 1, activeSheetIndex + 1))}
+                disabled={activeSheetIndex === sheets.length - 1}
+                className="p-1 rounded text-slate-600 hover:bg-white disabled:opacity-40 disabled:hover:bg-transparent transition-colors cursor-pointer"
+                title="Next Page"
+              >
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center justify-end gap-2 flex-1">
           {sheets.length > 0 && (
             <>
-              {sheets.length > 1 && (
-                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200 mr-2">
+              <div className="relative flex items-center" ref={exportDropdownRef}>
+                <div className="flex rounded-lg shadow-sm">
                   <button
-                    onClick={() => scrollToPage(Math.max(0, activeSheetIndex - 1))}
-                    disabled={activeSheetIndex === 0}
-                    className="p-1 rounded text-slate-600 hover:bg-white disabled:opacity-40 disabled:hover:bg-transparent transition-colors cursor-pointer"
-                    title="Previous Page"
+                    onClick={handleExportSingle}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold rounded-l-lg text-sm transition-colors border-r-0"
+                    title="Download current sheet as a standalone 12x12 PDF"
                   >
-                    <ArrowLeft className="w-3.5 h-3.5" />
+                    <Download className="w-4 h-4" />
+                    <span>Export Current</span>
                   </button>
-                  <div className="relative flex items-center">
-                    <select
-                      value={activeSheetIndex}
-                      onChange={(e) => scrollToPage(parseInt(e.target.value))}
-                      className="text-xs font-semibold bg-transparent border-none text-slate-700 py-0.5 pl-2 pr-6 focus:outline-none focus:ring-0 cursor-pointer min-w-[120px] max-w-[200px] appearance-none truncate"
-                    >
-                      {sheets.map((sheet, index) => (
-                        <option key={sheet.id} value={index}>
-                          Page {index + 1}: {sheet.folderName}
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-1.5 pointer-events-none" />
-                  </div>
                   <button
-                    onClick={() => scrollToPage(Math.min(sheets.length - 1, activeSheetIndex + 1))}
-                    disabled={activeSheetIndex === sheets.length - 1}
-                    className="p-1 rounded text-slate-600 hover:bg-white disabled:opacity-40 disabled:hover:bg-transparent transition-colors cursor-pointer"
-                    title="Next Page"
+                    onClick={() => setIsExportDropdownOpen(!isExportDropdownOpen)}
+                    className={`flex items-center justify-center px-2 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-r-lg transition-colors ${isExportDropdownOpen ? 'bg-slate-100' : ''}`}
                   >
-                    <ArrowRight className="w-3.5 h-3.5" />
+                    <ChevronDown className="w-4 h-4" />
                   </button>
                 </div>
-              )}
 
-              <button
-                onClick={handleExportSingle}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold rounded-lg shadow-sm text-sm transition-colors"
-                title="Download current sheet as a standalone 12x12 PDF"
-              >
-                <Download className="w-4 h-4" />
-                <span>Export Current Sheet</span>
-              </button>
-
-              <button
-                onClick={handleExportPortfolio}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-sm text-sm transition-colors"
-                title="Download all sheets compiled in a single multi-page PDF"
-              >
-                <Layers className="w-4 h-4" />
-                <span>Export Entire Portfolio ({sheets.length} pages)</span>
-              </button>
+                <AnimatePresence>
+                  {isExportDropdownOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 5 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 5 }}
+                      transition={{ duration: 0.15 }}
+                      className="absolute top-full right-0 mt-1 w-56 bg-white border border-slate-200 rounded-lg shadow-xl overflow-hidden z-50 flex flex-col"
+                    >
+                      <button
+                        onClick={() => {
+                          handleExportPortfolio();
+                          setIsExportDropdownOpen(false);
+                        }}
+                        className="flex items-center gap-3 px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 text-left w-full transition-colors border-b border-slate-100"
+                      >
+                        <Layers className="w-4 h-4 text-blue-600 shrink-0" />
+                        <div className="flex flex-col min-w-0">
+                          <span className="font-semibold text-slate-900 truncate">Export All Merged</span>
+                          <span className="text-[10px] text-slate-500 font-normal truncate">Single multi-page PDF</span>
+                        </div>
+                      </button>
+                      <button
+                        onClick={() => {
+                          handleExportAllZip();
+                          setIsExportDropdownOpen(false);
+                        }}
+                        className="flex items-center gap-3 px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 text-left w-full transition-colors"
+                      >
+                        <FolderOpen className="w-4 h-4 text-blue-600 shrink-0" />
+                        <div className="flex flex-col min-w-0">
+                          <span className="font-semibold text-slate-900 truncate">Export All ZIP</span>
+                          <span className="text-[10px] text-slate-500 font-normal truncate">Separate PDFs in a ZIP</span>
+                        </div>
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
 
               <button
                 onClick={() => setShowClearConfirm(true)}
@@ -1017,33 +1219,36 @@ export const ContactSheetsTab: React.FC = () => {
         </div>
       ) : (
         /* Workspace Screen */
-        <div id="workspace-container" className="flex-grow flex flex-col lg:flex-row relative overflow-hidden">
+        <div id="workspace-container" className="flex-grow flex flex-row relative overflow-hidden">
 
           {/* Left Sidebar: Controls & Settings Panel */}
           <motion.aside 
             key="controls-sidebar"
             initial={false}
             animate={{ 
-              width: isControlsCollapsed ? 48 : (typeof window !== 'undefined' && window.innerWidth >= 1024 ? controlsWidth : '100%'),
+              width: effectiveControlsWidth,
             }}
             transition={isResizing ? { duration: 0 } : { duration: 0.3, ease: 'easeInOut' }}
             className="border-r border-slate-200 bg-white flex flex-col flex-shrink-0 h-full overflow-hidden"
           >
-            <div className={`p-4 border-b border-slate-200 bg-slate-50/50 flex items-center ${isControlsCollapsed ? 'justify-center px-0' : 'justify-between'}`}>
-              <span className={`text-xs font-bold tracking-widest text-slate-400 uppercase flex items-center gap-1.5 whitespace-nowrap transition-opacity duration-200 ${isControlsCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'}`}>
+            <div className={`p-4 border-b border-slate-200 bg-slate-50/50 flex items-center ${effectiveIsControlsCollapsed ? 'justify-center px-0' : 'justify-between'}`}>
+              <span className={`text-xs font-bold tracking-widest text-slate-400 uppercase flex items-center gap-1.5 whitespace-nowrap transition-opacity duration-200 ${effectiveIsControlsCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'}`}>
                 <Sliders className="w-3.5 h-3.5 text-slate-400" />
                 Specification Controls
               </span>
               <button
                 onClick={() => setIsControlsCollapsed(!isControlsCollapsed)}
                 className="p-1 hover:bg-slate-200 rounded text-slate-500 transition-colors cursor-pointer flex items-center justify-center shrink-0"
-                title={isControlsCollapsed ? "Expand Controls" : "Collapse Controls"}
+                title={effectiveIsControlsCollapsed ? "Expand Controls" : "Collapse Controls"}
               >
-                {isControlsCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+                {effectiveIsControlsCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
               </button>
             </div>
 
-            <div className={`flex-grow p-4 space-y-6 overflow-y-auto w-[${controlsWidth}px] transition-opacity duration-200 ${isControlsCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+            <div 
+              className={`flex-grow p-4 space-y-6 overflow-y-auto transition-opacity duration-200 ${effectiveIsControlsCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+              style={{ width: controlsWidth }}
+            >
               {/* Header Right Title Customizer */}
               <div>
                 <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 mb-2">
@@ -1061,6 +1266,102 @@ export const ContactSheetsTab: React.FC = () => {
                   Customizes the right-aligned header title on minimal layout.
                 </span>
               </div>
+              {/* Labels configuration */}
+              <div className="space-y-3 pt-3 border-t border-slate-100">
+                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 mb-2">
+                  Asset Labels
+                </label>
+                
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-slate-600">Show filename labels</span>
+                  <input
+                    type="checkbox"
+                    checked={settings.showLabels}
+                    onChange={(e) => setSettings(prev => ({ ...prev, showLabels: e.target.checked }))}
+                    className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
+                  />
+                </div>
+
+                {settings.showLabels && (
+                  <div className="space-y-3 animate-fade-in">
+                    <div>
+                      <label className="text-xs text-slate-600 mb-1 flex justify-between">
+                        <span>Font Size</span>
+                        <span>{settings.labelFontSize}px</span>
+                      </label>
+                      <input
+                        type="range"
+                        min="6"
+                        max="24"
+                        value={settings.labelFontSize}
+                        onChange={(e) => setSettings(prev => ({ ...prev, labelFontSize: parseInt(e.target.value) }))}
+                        className="w-full accent-blue-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-slate-600 mb-1 block">Font Family</label>
+                      <select
+                        value={settings.labelFontFamily}
+                        onChange={(e) => setSettings(prev => ({ ...prev, labelFontFamily: e.target.value }))}
+                        className="w-full text-xs px-3 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                      >
+                        <option value="Calibri, sans-serif">Calibri</option>
+                        <option value="Inter, sans-serif">Inter</option>
+                        <option value="'JetBrains Mono', monospace">JetBrains Mono</option>
+                        <option value="Arial, sans-serif">Arial</option>
+                        <option value="'Times New Roman', serif">Times New Roman</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-slate-600 mb-1 block">Font Weight</label>
+                      <select
+                        value={settings.labelFontWeight}
+                        onChange={(e) => setSettings(prev => ({ ...prev, labelFontWeight: e.target.value }))}
+                        className="w-full text-xs px-3 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                      >
+                        <option value="normal">Normal</option>
+                        <option value="bold">Bold</option>
+                        <option value="100">Thin (100)</option>
+                        <option value="300">Light (300)</option>
+                        <option value="500">Medium (500)</option>
+                        <option value="700">Bold (700)</option>
+                        <option value="900">Black (900)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-slate-600 mb-1 flex justify-between items-center">
+                        <span>Label Color</span>
+                        <span className="font-mono text-[10px] text-slate-400 uppercase">{settings.labelColor}</span>
+                      </label>
+                      <div className="flex gap-2 items-center">
+                        <input
+                          type="color"
+                          value={settings.labelColor}
+                          onChange={(e) => setSettings(prev => ({ ...prev, labelColor: e.target.value }))}
+                          className="w-8 h-8 p-0 border-0 rounded cursor-pointer"
+                        />
+                        <div className="flex gap-1 overflow-x-auto pb-1 flex-grow">
+                          {['#000000', '#334155', '#64748b', '#ffffff', '#ef4444', '#3b82f6'].map(color => (
+                            <button
+                              key={color}
+                              onClick={() => setSettings(prev => ({ ...prev, labelColor: color }))}
+                              className={`shrink-0 w-6 h-6 rounded border transition-all ${
+                                settings.labelColor === color ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200'
+                              }`}
+                              style={{ backgroundColor: color }}
+                              title={color}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
 
               {/* Fit modes */}
               <div>
@@ -1116,39 +1417,41 @@ export const ContactSheetsTab: React.FC = () => {
               </div>
 
               {/* Header Texts customizing */}
-              <div className="space-y-3 pt-3 border-t border-slate-100">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Customize Header Content</span>
-                
-                <div>
-                  <label className="text-xs text-slate-600 mb-1 block">Title Heading</label>
-                  <input
-                    type="text"
-                    value={settings.customTitle}
-                    onChange={(e) => setSettings(prev => ({ ...prev, customTitle: e.target.value }))}
-                    className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                </div>
+              {settings.headerStyle !== 'minimal' && (
+                <div className="space-y-3 pt-3 border-t border-slate-100">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Customize Header Content</span>
+                  
+                  <div>
+                    <label className="text-xs text-slate-600 mb-1 block">Title Heading</label>
+                    <input
+                      type="text"
+                      value={settings.customTitle}
+                      onChange={(e) => setSettings(prev => ({ ...prev, customTitle: e.target.value }))}
+                      className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
 
-                <div>
-                  <label className="text-xs text-slate-600 mb-1 block">Subtitle Description</label>
-                  <input
-                    type="text"
-                    value={settings.customSubtitle}
-                    onChange={(e) => setSettings(prev => ({ ...prev, customSubtitle: e.target.value }))}
-                    className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                </div>
+                  <div>
+                    <label className="text-xs text-slate-600 mb-1 block">Subtitle Description</label>
+                    <input
+                      type="text"
+                      value={settings.customSubtitle}
+                      onChange={(e) => setSettings(prev => ({ ...prev, customSubtitle: e.target.value }))}
+                      className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
 
-                <div>
-                  <label className="text-xs text-slate-600 mb-1 block">Creation Date</label>
-                  <input
-                    type="text"
-                    value={settings.customDate}
-                    onChange={(e) => setSettings(prev => ({ ...prev, customDate: e.target.value }))}
-                    className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
+                  <div>
+                    <label className="text-xs text-slate-600 mb-1 block">Creation Date</label>
+                    <input
+                      type="text"
+                      value={settings.customDate}
+                      onChange={(e) => setSettings(prev => ({ ...prev, customDate: e.target.value }))}
+                      className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Grid Background presets */}
               <div className="pt-3 border-t border-slate-100">
@@ -1176,82 +1479,65 @@ export const ContactSheetsTab: React.FC = () => {
                 </div>
               </div>
 
-              {/* Labels configuration */}
-              <div className="space-y-3 pt-3 border-t border-slate-100">
+              {/* Cell Background presets */}
+              <div className="pt-3 border-t border-slate-100">
                 <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 mb-2">
-                  Asset Labels
+                  <Grid className="w-3.5 h-3.5 text-slate-400" />
+                  Cell Background Color
                 </label>
-                
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-600">Show filename labels</span>
-                  <input
-                    type="checkbox"
-                    checked={settings.showLabels}
-                    onChange={(e) => setSettings(prev => ({ ...prev, showLabels: e.target.checked }))}
-                    className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
-                  />
+                <div className="grid grid-cols-2 gap-2">
+                  {(Object.keys(CELL_BACKGROUND_COLORS) as Array<keyof typeof CELL_BACKGROUND_COLORS>).map(color => (
+                    <button
+                      key={color}
+                      onClick={() => setSettings(prev => ({ ...prev, cellBackgroundColor: color }))}
+                      className={`px-3 py-1.5 text-xs font-semibold border rounded-lg capitalize flex items-center gap-2 transition-all ${
+                        settings.cellBackgroundColor === color
+                          ? 'bg-blue-50 border-blue-500 text-blue-700 shadow-sm'
+                          : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span className={`w-3 h-3 rounded border border-slate-300 ${CELL_BACKGROUND_COLORS[color]}`} />
+                      {color.replace('-', ' ')}
+                    </button>
+                  ))}
                 </div>
-
-                {settings.showLabels && (
-                  <div className="space-y-3 animate-fade-in">
-                    <div>
-                      <label className="text-xs text-slate-600 mb-1 block">Label Font Size</label>
-                      <select
-                        value={settings.labelFontSize}
-                        onChange={(e) => setSettings(prev => ({ ...prev, labelFontSize: parseInt(e.target.value) }))}
-                        className="w-full text-xs px-3 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
-                      >
-                        <option value={8}>8px (Dense/Tiny)</option>
-                        <option value={10}>10px (Standard)</option>
-                        <option value={12}>12px (Medium)</option>
-                        <option value={14}>14px (Large)</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="text-xs text-slate-600 mb-1 block">Label Color</label>
-                      <div className="flex gap-2">
-                        {['#334155', '#64748b', '#0f172a', '#ffffff', '#ef4444'].map(color => (
-                          <button
-                            key={color}
-                            onClick={() => setSettings(prev => ({ ...prev, labelColor: color }))}
-                            className={`w-6 h-6 rounded-full border-2 transition-all ${
-                              settings.labelColor === color ? 'border-blue-500 scale-110' : 'border-slate-200'
-                            }`}
-                            style={{ backgroundColor: color }}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
 
               {/* Footer controls */}
               <div className="space-y-3 pt-3 border-t border-slate-100">
-                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 mb-2">
-                  Footer Config
-                </label>
-
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-600">Include page numbers</span>
+                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center justify-between gap-1.5 mb-2">
+                  <span>Footer Config</span>
                   <input
                     type="checkbox"
-                    checked={settings.footerShowPageNumber}
-                    onChange={(e) => setSettings(prev => ({ ...prev, footerShowPageNumber: e.target.checked }))}
+                    checked={settings.showFooter}
+                    onChange={(e) => setSettings(prev => ({ ...prev, showFooter: e.target.checked }))}
                     className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
                   />
-                </div>
+                </label>
 
-                <div>
-                  <label className="text-xs text-slate-600 mb-1 block">Custom Footer Notes</label>
-                  <input
-                    type="text"
-                    value={settings.footerCustomText}
-                    onChange={(e) => setSettings(prev => ({ ...prev, footerCustomText: e.target.value }))}
-                    className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                </div>
+                {settings.showFooter && (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-slate-600">Include page numbers</span>
+                      <input
+                        type="checkbox"
+                        checked={settings.footerShowPageNumber}
+                        onChange={(e) => setSettings(prev => ({ ...prev, footerShowPageNumber: e.target.checked }))}
+                        className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-slate-600 mb-1 block">Custom Footer Notes</label>
+                      <input
+                        type="text"
+                        value={settings.footerCustomText}
+                        onChange={(e) => setSettings(prev => ({ ...prev, footerCustomText: e.target.value }))}
+                        className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                    </div>
+                  </>
+                )}
               </div>
 
             </div>
@@ -1279,7 +1565,7 @@ export const ContactSheetsTab: React.FC = () => {
 
           {/* Vertical Drag Resizer Handle Bar */}
           <div
-            className="hidden lg:block w-1 hover:w-1.5 bg-slate-200 hover:bg-blue-500 cursor-col-resize select-none transition-all duration-150 self-stretch z-10"
+            className="w-1 hover:w-1.5 bg-slate-200 hover:bg-blue-500 cursor-col-resize select-none transition-all duration-150 self-stretch z-10 shrink-0"
             onMouseDown={startResizingControls}
             title="Drag to resize Controls Sidebar"
           />
@@ -1290,27 +1576,34 @@ export const ContactSheetsTab: React.FC = () => {
         {/* Core Interactive Specification Preview */}
         <div 
           ref={workspaceScrollRef}
-          className="flex-grow pt-4 pb-8 px-4 sm:pt-6 sm:pb-12 sm:px-8 overflow-y-auto flex flex-col items-center gap-12 min-h-[500px]"
+          className="flex-grow pt-8 pb-8 px-4 sm:pt-10 sm:pb-12 sm:px-8 overflow-y-auto flex flex-col items-center gap-16 min-h-[500px]"
           style={{ scrollBehavior: 'smooth' }}
         >
           {sheets.map((sheet, index) => {
+            const group = specGroups.find(g => g.pages.some(p => p.sheetIndex === index));
+            const pIdx = group?.pages.findIndex(p => p.sheetIndex === index) ?? -1;
+            const isMultiPage = (group?.pages.length ?? 0) > 1;
+            const cleanFolderName = group?.specName || sheet.folderName.replace(/\s\(Part\s\d+\)$/, "");
+
             const isLoaded = loadedIndices[index] || Math.abs(index - activeSheetIndex) <= 1;
 
             return (
               <div 
                 key={sheet.id}
                 id={`live-preview-sheet-canvas-${index}`}
-                className="relative shadow-2xl rounded-lg overflow-hidden border border-slate-300 max-w-[700px] w-full bg-white transition-all duration-300 scroll-mt-6 shrink-0"
+                className="relative shadow-2xl rounded-lg overflow-visible max-w-[700px] w-full bg-white transition-all duration-300 scroll-mt-10 shrink-0"
               >
                 
-                {/* Page tag overlay indicator on top left */}
-                <div className="absolute top-3 left-3 bg-slate-900/80 text-white font-mono text-[10px] font-bold px-2 py-0.5 rounded shadow z-20">
-                  PAGE {index + 1}
-                </div>
+                {/* Part indicator overlay on top center */}
+                {isMultiPage && (
+                  <div className="absolute -top-7 left-1/2 transform -translate-x-1/2 bg-slate-200 text-slate-600 font-sans text-[11px] font-bold px-3 py-1 rounded-t-lg border border-b-0 border-slate-300 shadow-sm z-20">
+                    PART {pIdx + 1}
+                  </div>
+                )}
 
                 {/* 12x12-inch Canvas Aspect Block */}
                 <div 
-                  className={`w-full aspect-square p-8 flex flex-col justify-between ${BACKGROUND_COLORS[settings.backgroundCanvas]} select-none`}
+                  className={`w-full aspect-square p-4 sm:p-6 flex flex-col justify-between ${BACKGROUND_COLORS[settings.backgroundCanvas]} select-none border border-slate-300 rounded-lg overflow-hidden`}
                   style={{
                     boxSizing: 'border-box'
                   }}
@@ -1321,7 +1614,7 @@ export const ContactSheetsTab: React.FC = () => {
                     {settings.headerStyle === 'minimal' ? (
                       <div className="flex justify-between items-baseline w-full">
                         <span className={headerTheme.title}>
-                          {sheet.folderName}
+                          {cleanFolderName}
                         </span>
                         <span className={headerTheme.subtitle}>
                           {settings.minimalRightTitle || 'Photo Research'}
@@ -1334,7 +1627,7 @@ export const ContactSheetsTab: React.FC = () => {
                           <p className={headerTheme.subtitle}>{settings.customSubtitle}</p>
                         </div>
                         <div className={headerTheme.meta}>
-                          <div><strong>Folder:</strong> {sheet.folderName}</div>
+                          <div><strong>Folder:</strong> {cleanFolderName}</div>
                           <div><strong>Date:</strong> {settings.customDate}</div>
                         </div>
                       </>
@@ -1344,7 +1637,7 @@ export const ContactSheetsTab: React.FC = () => {
                         <div className="flex justify-between items-end">
                           <p className={headerTheme.subtitle}>{settings.customSubtitle}</p>
                           <span className={headerTheme.meta || 'text-xs text-slate-400 font-mono'}>
-                            Folder: {sheet.folderName} | {settings.customDate}
+                            Folder: {cleanFolderName} | {settings.customDate}
                           </span>
                         </div>
                       </>
@@ -1352,7 +1645,7 @@ export const ContactSheetsTab: React.FC = () => {
                   </header>
 
                   {/* 5x5 ASSETS GRID */}
-                  <div className="flex-grow grid grid-cols-5 gap-3 items-center justify-center align-middle">
+                  <div className="flex-grow grid grid-cols-5 grid-rows-5 gap-2 items-stretch justify-items-stretch min-h-0 mt-2 mb-2">
                     {!isLoaded ? (
                       <div className="col-span-5 h-full flex flex-col items-center justify-center text-slate-400">
                         <RefreshCw className="w-8 h-8 animate-spin mb-2" />
@@ -1366,10 +1659,10 @@ export const ContactSheetsTab: React.FC = () => {
                           return (
                             <div 
                               key={`empty-${slotIndex}`}
-                              className={`aspect-square border border-dashed rounded-md flex items-center justify-center ${
+                              className={`h-full min-h-0 rounded-md flex items-center justify-center ${
                                 isDark 
-                                  ? 'border-slate-800 bg-slate-900/10' 
-                                  : 'border-slate-300/60 bg-slate-50/10'
+                                  ? 'bg-slate-900/10' 
+                                  : CELL_BACKGROUND_COLORS[settings.cellBackgroundColor as keyof typeof CELL_BACKGROUND_COLORS]
                               }`}
                             />
                           );
@@ -1378,10 +1671,10 @@ export const ContactSheetsTab: React.FC = () => {
                         return (
                           <div 
                             key={image.id}
-                            className={`group relative aspect-square border rounded flex flex-col justify-between overflow-hidden ${
+                            className={`group relative h-full min-h-0 min-w-0 rounded flex flex-col justify-between overflow-hidden ${
                               isDark 
-                                ? 'border-slate-800 bg-slate-950/20' 
-                                : 'border-slate-200 bg-black/5'
+                                ? 'bg-slate-950/20' 
+                                : CELL_BACKGROUND_COLORS[settings.cellBackgroundColor as keyof typeof CELL_BACKGROUND_COLORS]
                             }`}
                           >
                             {/* Hover Operations overlay */}
@@ -1418,14 +1711,14 @@ export const ContactSheetsTab: React.FC = () => {
                             </div>
 
                             {/* Image display */}
-                            <div className="flex-grow w-full h-0 relative flex items-center justify-center overflow-hidden">
+                            <div className="flex-grow w-full h-0 relative flex items-center justify-center overflow-hidden min-h-0">
                               <img
                                 src={image.dataUrl}
                                 alt={image.name}
                                 className={`w-full h-full ${
                                   settings.imageFit === 'contain' 
-                                    ? 'object-contain object-top' 
-                                    : 'object-cover object-top'
+                                    ? 'object-contain object-center' 
+                                    : 'object-cover object-center'
                                 }`}
                                 referrerPolicy="no-referrer"
                               />
@@ -1434,18 +1727,17 @@ export const ContactSheetsTab: React.FC = () => {
                             {/* Optional visual label */}
                             {settings.showLabels && (
                               <div 
-                                className={`py-1 px-1 text-center select-all truncate border-t shrink-0 font-mono ${
-                                  isDark 
-                                    ? 'bg-slate-900/90 border-slate-800' 
-                                    : 'bg-slate-50/90 border-slate-100'
-                                }`}
+                                className={`py-1 px-1 text-center select-all break-all overflow-hidden shrink-0 flex flex-col justify-center items-center bg-transparent`}
                                 style={{ 
                                   fontSize: `${settings.labelFontSize}px`,
                                   color: settings.labelColor,
+                                  fontFamily: settings.labelFontFamily,
+                                  fontWeight: settings.labelFontWeight,
+                                  lineHeight: '1.2'
                                 }}
                                 title={image.name}
                               >
-                                {image.name}
+                                {image.name.replace(/\.[^/.]+$/, "")}
                               </div>
                             )}
                           </div>
@@ -1455,16 +1747,18 @@ export const ContactSheetsTab: React.FC = () => {
                   </div>
 
                   {/* SPECIFICATION FOOTER */}
-                  <footer className={`border-t pt-4 mt-6 flex justify-between items-center text-xs font-sans ${
-                    isDark ? 'border-slate-800 text-slate-400' : 'border-slate-200 text-slate-400'
-                  }`}>
-                    <span className="truncate max-w-[70%]">{settings.footerCustomText}</span>
-                    {settings.footerShowPageNumber && (
-                      <span className={`font-semibold ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                        Page {index + 1} of {sheets.length}
-                      </span>
-                    )}
-                  </footer>
+                  {settings.showFooter && (
+                    <footer className={`border-t pt-2 mt-2 flex justify-between items-center text-xs font-sans ${
+                      isDark ? 'border-slate-800 text-slate-400' : 'border-slate-200 text-slate-400'
+                    }`}>
+                      <span className="truncate max-w-[70%]">{settings.footerCustomText}</span>
+                      {settings.footerShowPageNumber && (
+                        <span className={`font-semibold ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
+                          Page {index + 1} of {sheets.length}
+                        </span>
+                      )}
+                    </footer>
+                  )}
 
                 </div>
               </div>
@@ -1474,11 +1768,15 @@ export const ContactSheetsTab: React.FC = () => {
 
         {/* Hidden Offscreen Render Wrapper (stores all pages of portfolio so pdf rendering grabs every DOM sheet) */}
             <div className="absolute top-0 left-0 w-0 h-0 overflow-hidden pointer-events-none">
-              {sheets.map((sheet, index) => (
+              {sheets.map((sheet, index) => {
+                const group = specGroups.find(g => g.pages.some(p => p.sheetIndex === index));
+                const cleanFolderName = group?.specName || sheet.folderName.replace(/\s\(Part\s\d+\)$/, "");
+
+                return (
                 <div key={`hidden-sheet-${sheet.id}`} className="w-[1152px] h-[1152px]">
                   <div 
                     id={`hidden-sheet-canvas-${index}`}
-                    className={`w-[1152px] h-[1152px] p-12 flex flex-col justify-between ${BACKGROUND_COLORS[settings.backgroundCanvas]}`}
+                    className={`w-[1152px] h-[1152px] p-6 flex flex-col justify-between ${BACKGROUND_COLORS[settings.backgroundCanvas]}`}
                     style={{
                       boxSizing: 'border-box'
                     }}
@@ -1488,7 +1786,7 @@ export const ContactSheetsTab: React.FC = () => {
                       {settings.headerStyle === 'minimal' ? (
                         <div className="flex justify-between items-baseline w-full">
                           <span className={`text-3xl font-bold font-sans tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                            {sheet.folderName}
+                            {cleanFolderName}
                           </span>
                           <span className={`text-lg font-semibold font-sans tracking-wide uppercase ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
                             {settings.minimalRightTitle || 'Photo Research'}
@@ -1501,7 +1799,7 @@ export const ContactSheetsTab: React.FC = () => {
                             <p className={headerTheme.subtitle}>{settings.customSubtitle}</p>
                           </div>
                           <div className={headerTheme.meta}>
-                            <div><strong>Folder:</strong> {sheet.folderName}</div>
+                            <div><strong>Folder:</strong> {cleanFolderName}</div>
                             <div><strong>Date:</strong> {settings.customDate}</div>
                           </div>
                         </>
@@ -1511,62 +1809,61 @@ export const ContactSheetsTab: React.FC = () => {
                           <div className="flex justify-between items-end">
                             <p className={headerTheme.subtitle}>{settings.customSubtitle}</p>
                             <span className={headerTheme.meta || 'text-xs text-slate-400 font-mono'}>
-                              Folder: {sheet.folderName} | {settings.customDate}
+                              Folder: {cleanFolderName} | {settings.customDate}
                             </span>
                           </div>
                         </>
                       )}
                     </header>
 
-                    <div className="flex-grow grid grid-cols-5 gap-4 items-center justify-center">
+                    <div className="flex-grow grid grid-cols-5 grid-rows-5 gap-3 items-stretch justify-items-stretch min-h-0 mt-4 mb-4">
                       {Array.from({ length: 25 }).map((_, slotIndex) => {
                         const image = sheet.images[slotIndex];
                         if (!image) {
-                          return (
-                            <div 
+                          return (                            <div 
                               key={`hidden-empty-${slotIndex}`}
-                              className={`aspect-square border border-dashed rounded-md ${
+                              className={`h-full min-h-0 rounded-md ${
                                 isDark 
-                                  ? 'border-slate-800 bg-slate-900/10' 
-                                  : 'border-slate-300/40'
+                                  ? 'bg-slate-900/10' 
+                                  : CELL_BACKGROUND_COLORS[settings.cellBackgroundColor as keyof typeof CELL_BACKGROUND_COLORS]
                               }`}
                             />
                           );
                         }
+
                         return (
                           <div 
                             key={`hidden-img-${image.id}`}
-                            className={`aspect-square border rounded flex flex-col justify-between overflow-hidden ${
+                            className={`h-full min-h-0 min-w-0 rounded flex flex-col justify-between overflow-hidden ${
                               isDark 
-                                ? 'border-slate-800 bg-slate-950/20' 
-                                : 'border-slate-200 bg-black/5'
+                                ? 'bg-slate-950/20' 
+                                : CELL_BACKGROUND_COLORS[settings.cellBackgroundColor as keyof typeof CELL_BACKGROUND_COLORS]
                             }`}
                           >
-                            <div className="flex-grow w-full h-0 relative flex items-center justify-center overflow-hidden">
+                            <div className="flex-grow w-full h-0 relative flex items-center justify-center overflow-hidden min-h-0">
                               <img
                                 src={image.dataUrl}
                                 alt={image.name}
                                 className={`w-full h-full ${
                                   settings.imageFit === 'contain' 
-                                    ? 'object-contain object-top' 
-                                    : 'object-cover object-top'
+                                    ? 'object-contain object-center' 
+                                    : 'object-cover object-center'
                                 }`}
                                 referrerPolicy="no-referrer"
                               />
                             </div>
                             {settings.showLabels && (
                               <div 
-                                className={`py-1 px-1 text-center truncate border-t font-mono ${
-                                  isDark 
-                                    ? 'bg-slate-900/90 border-slate-800' 
-                                    : 'bg-slate-50 border-slate-100'
-                                }`}
+                                className={`py-1 px-1 text-center break-all overflow-hidden bg-transparent flex flex-col justify-center items-center`}
                                 style={{ 
                                   fontSize: `${settings.labelFontSize}px`,
                                   color: settings.labelColor,
+                                  fontFamily: settings.labelFontFamily,
+                                  fontWeight: settings.labelFontWeight,
+                                  lineHeight: '1.2'
                                 }}
                               >
-                                {image.name}
+                                {image.name.replace(/\.[^/.]+$/, "")}
                               </div>
                             )}
                           </div>
@@ -1574,48 +1871,60 @@ export const ContactSheetsTab: React.FC = () => {
                       })}
                     </div>
 
-                    <footer className={`border-t pt-6 mt-8 flex justify-between items-center text-sm font-sans ${
-                      isDark ? 'border-slate-800 text-slate-400' : 'border-slate-200 text-slate-400'
-                    }`}>
-                      <span>{settings.footerCustomText}</span>
-                      {settings.footerShowPageNumber && (
-                        <span className={`font-semibold ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                          Page {index + 1} of {sheets.length}
-                        </span>
-                      )}
-                    </footer>
+                    {settings.showFooter && (
+                      <footer className={`border-t pt-3 mt-3 flex justify-between items-center text-sm font-sans ${
+                        isDark ? 'border-slate-800 text-slate-400' : 'border-slate-200 text-slate-400'
+                      }`}>
+                        <span>{settings.footerCustomText}</span>
+                        {settings.footerShowPageNumber && (
+                          <span className={`font-semibold ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
+                            Page {index + 1} of {sheets.length}
+                          </span>
+                        )}
+                      </footer>
+                    )}
                   </div>
                 </div>
-              ))}
+              )})}
             </div>
 
           </main>
+
+          {/* Right Handle Resizer */}
+          <div
+            className="w-1 hover:w-1.5 bg-slate-200 hover:bg-blue-500 cursor-col-resize select-none transition-all duration-150 self-stretch z-10 shrink-0"
+            onMouseDown={startResizingSpecs}
+            title="Drag to resize Specs Sidebar"
+          />
 
           {/* Specs Sidebar (Right) */}
           <motion.aside
             key="specs-sidebar"
             initial={false}
             animate={{ 
-              width: isPagesSidebarCollapsed ? 48 : (typeof window !== 'undefined' && window.innerWidth >= 1024 ? 256 : '100%'),
+              width: effectiveSpecsWidth,
             }}
-            transition={{ duration: 0.3, ease: 'easeInOut' }}
+            transition={isResizingSpecs ? { duration: 0 } : { duration: 0.3, ease: 'easeInOut' }}
             className="border-l border-slate-200 bg-white flex flex-col flex-shrink-0 h-full overflow-hidden relative"
           >
-            <div className={`p-4 border-b border-slate-200 bg-slate-50/50 flex items-center ${isPagesSidebarCollapsed ? 'justify-center px-0' : 'justify-between'}`}>
+            <div className={`p-4 border-b border-slate-200 bg-slate-50/50 flex items-center ${effectiveIsSpecsCollapsed ? 'justify-center px-0' : 'justify-between'}`}>
               <button
                 onClick={() => setIsPagesSidebarCollapsed(!isPagesSidebarCollapsed)}
                 className="p-1 hover:bg-slate-200 rounded text-slate-500 transition-colors cursor-pointer flex items-center justify-center shrink-0"
-                title={isPagesSidebarCollapsed ? "Expand Specs" : "Collapse Specs"}
+                title={effectiveIsSpecsCollapsed ? "Expand Specs" : "Collapse Specs"}
               >
-                {isPagesSidebarCollapsed ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                {effectiveIsSpecsCollapsed ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
               </button>
-              <span className={`text-xs font-bold tracking-widest text-slate-400 uppercase flex items-center gap-1.5 whitespace-nowrap transition-opacity duration-200 ${isPagesSidebarCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'}`}>
+              <span className={`text-xs font-bold tracking-widest text-slate-400 uppercase flex items-center gap-1.5 whitespace-nowrap transition-opacity duration-200 ${effectiveIsSpecsCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'}`}>
                 <BookOpen className="w-3.5 h-3.5" />
                 Specs ({specGroups.length})
               </span>
             </div>
 
-            <div className={`flex-grow p-2 space-y-1 overflow-y-auto bg-slate-50/30 w-[256px] transition-opacity duration-200 ${isPagesSidebarCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+            <div 
+              className={`flex-grow p-2 space-y-1 overflow-y-auto bg-slate-50/30 transition-opacity duration-200 ${effectiveIsSpecsCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+              style={{ width: specsWidth }}
+            >
                 {specGroups.map((group, groupIdx) => {
                   const isSpecActive = group.pages.some(p => p.sheetIndex === activeSheetIndex);
                   

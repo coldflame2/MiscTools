@@ -6,14 +6,18 @@ export interface ContactSheetSettings {
   showLabels: boolean;
   labelFontSize: number;
   labelColor: string;
+  labelFontFamily: string;
+  labelFontWeight: string;
   backgroundCanvas: 'white' | 'black' | 'charcoal' | 'transparent';
   headerStyle: 'minimal' | 'classic' | 'academic' | 'industrial';
+  showFooter: boolean;
   footerShowPageNumber: boolean;
   footerCustomText: string;
   customTitle: string;
   customSubtitle: string;
   customDate: string;
   minimalRightTitle: string;
+  cellBackgroundColor: 'white' | 'transparent' | 'slate-50' | 'slate-100' | 'slate-800' | 'black';
 }
 
 export interface SheetImage {
