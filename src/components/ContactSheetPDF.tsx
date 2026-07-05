@@ -236,47 +236,69 @@ export const generatePdfBlob = async (sheets: any[], settings: any): Promise<Blo
       }
       
       if (image && image.dataUrl) {
-        // We need to fetch image dimensions to properly contain/cover it
         try {
           const imgObj = await getImgInfo(image.dataUrl);
           const imgRatio = imgObj.width / imgObj.height;
-          const cellRatio = CELL_WIDTH / CELL_HEIGHT;
+
+          // 1. Calculate the text height FIRST
+          let labelHeight = 0;
+          let linesToDraw: string[] = [];
+          let lineHeight = 0;
+
+          if (settings.showLabels) {
+            // Set font early so splitTextToSize measures correctly
+            doc.setFont('helvetica', settings.labelFontWeight === 'bold' ? 'bold' : 'normal');
+            doc.setFontSize(settings.labelFontSize || 10);
+            lineHeight = (settings.labelFontSize || 10) * 1.2;
+
+            const filename = image.name.replace(/\.[^/.]+$/, "");
+            linesToDraw = doc.splitTextToSize(filename, CELL_WIDTH - 8);
+            
+            // Allow all lines to render (removed the 3-line slice/truncation limit)
+            // Calculate total label height, adding 8px for top/bottom padding
+            labelHeight = (linesToDraw.length * lineHeight) + 8; 
+          }
+
+          // 2. Adjust available cell height for the image
+          // Using Math.max to prevent negative heights if a filename is extremely long
+          const AVAILABLE_IMG_HEIGHT = Math.max(10, CELL_HEIGHT - labelHeight);
+          const cellRatio = CELL_WIDTH / AVAILABLE_IMG_HEIGHT;
           
           let drawW = CELL_WIDTH;
-          let drawH = CELL_HEIGHT;
+          let drawH = AVAILABLE_IMG_HEIGHT;
           let drawX = x;
           let drawY = y;
 
-          // For 'contain', calculate dimensions
+          // 3. Image Fit Logic (Contain)
           if (settings.imageFit === 'contain') {
             if (imgRatio > cellRatio) {
-              // Image is wider
+              // Image is wider than available space
               drawW = CELL_WIDTH;
               drawH = CELL_WIDTH / imgRatio;
-              drawY = y + (CELL_HEIGHT - drawH) / 2;
+              drawY = y + (AVAILABLE_IMG_HEIGHT - drawH) / 2;
             } else {
-              // Image is taller
-              drawH = CELL_HEIGHT;
-              drawW = CELL_HEIGHT * imgRatio;
+              // Image is taller than available space
+              drawH = AVAILABLE_IMG_HEIGHT;
+              drawW = AVAILABLE_IMG_HEIGHT * imgRatio;
               drawX = x + (CELL_WIDTH - drawW) / 2;
             }
           }
           
-          // Note: for 'cover' in jsPDF we'd need clipping paths, which are tricky. 
-          // For simplicity, we just use contain-like math for cover too, or we can use clipping!
+          // 4. Image Fit Logic (Cover) and Drawing
           if (settings.imageFit === 'cover') {
             doc.advancedAPI(doc => {
-              doc.rect(x, y, CELL_WIDTH, CELL_HEIGHT);
+              // Clip to the available image area, avoiding the label space below
+              doc.rect(x, y, CELL_WIDTH, AVAILABLE_IMG_HEIGHT);
               doc.clip();
               
               if (imgRatio > cellRatio) {
-                drawH = CELL_HEIGHT;
-                drawW = CELL_HEIGHT * imgRatio;
+                drawH = AVAILABLE_IMG_HEIGHT;
+                drawW = AVAILABLE_IMG_HEIGHT * imgRatio;
                 drawX = x + (CELL_WIDTH - drawW) / 2;
               } else {
                 drawW = CELL_WIDTH;
                 drawH = CELL_WIDTH / imgRatio;
-                drawY = y + (CELL_HEIGHT - drawH) / 2;
+                drawY = y + (AVAILABLE_IMG_HEIGHT - drawH) / 2;
               }
               doc.addImage(image.dataUrl, 'JPEG', drawX, drawY, drawW, drawH);
             });
@@ -284,28 +306,17 @@ export const generatePdfBlob = async (sheets: any[], settings: any): Promise<Blo
             doc.addImage(image.dataUrl, 'JPEG', drawX, drawY, drawW, drawH);
           }
 
-          if (settings.showLabels) {
+          // 5. Draw Labels below the image
+          if (settings.showLabels && linesToDraw.length > 0) {
             let labelColorRgb = hexToRgb(settings.labelColor || '#000000');
             doc.setTextColor(labelColorRgb.r, labelColorRgb.g, labelColorRgb.b);
-            doc.setFont('helvetica', settings.labelFontWeight === 'bold' ? 'bold' : 'normal');
-            doc.setFontSize(settings.labelFontSize || 10);
             
-            const filename = image.name.replace(/\.[^/.]+$/, "");
-            const textLines = doc.splitTextToSize(filename, CELL_WIDTH - 8);
+            // I removed the white background rectangle here because the entire cell 
+            // is already painted with the cellBgColor earlier in your loop.
             
-            // Limit to 2 lines for aesthetics (like earlier)
-            const linesToDraw = textLines.slice(0, 2);
-            if (textLines.length > 2) {
-                linesToDraw[1] = linesToDraw[1].substring(0, Math.max(0, linesToDraw[1].length - 3)) + '...';
-            }
-            
-            const lineHeight = (settings.labelFontSize || 10) * 1.2;
-            // Draw background for text to make it readable? No, react-pdf didn't have bg.
-            const textY = y + CELL_HEIGHT - (linesToDraw.length * lineHeight) + (lineHeight * 0.8);
-            
-            // Background for text (semi-transparent white?)
-            doc.setFillColor(255, 255, 255);
-            doc.rect(x, textY - lineHeight * 0.8, CELL_WIDTH, linesToDraw.length * lineHeight + 4, 'F');
+            // jsPDF draws text from the baseline. Start exactly below the image area, 
+            // plus 4px padding, plus the height of one line.
+            const textY = y + AVAILABLE_IMG_HEIGHT + 4 + (lineHeight * 0.8);
             
             doc.text(linesToDraw, x + CELL_WIDTH / 2, textY, { align: 'center' });
           }

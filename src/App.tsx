@@ -857,7 +857,10 @@ const App: React.FC = () => {
         return (
           <>
             <div className="flex gap-2">
-              <div className="flex-grow bg-white rounded-xl shadow-lg p-1 sm:p-2 flex gap-1 transition-all duration-300">
+              <div 
+                className="flex-grow bg-white rounded-xl shadow-lg p-1 sm:p-2 flex gap-1 transition-all duration-300"
+                style={{ marginBottom: '0px', marginTop: '0px' }}
+              >
                 <NavigationRail
                     activeView={activeView}
                     onNavigate={setActiveView}
@@ -975,9 +978,9 @@ const App: React.FC = () => {
   ];
 
   return (
-    <main className="container mx-auto p-2 sm:p-4">
-      <div className="mb-3 border-b border-slate-200">
-        <nav className="-mb-px flex space-x-6" aria-label="Tabs">
+    <main className="container p-2 ml-[15px] mr-[15px]">
+      <div className="border-b border-slate-200" style={{ marginBottom: '1px', height: '25.957099999999997px' }}>
+        <nav className="-mb-px flex space-x-6" aria-label="Tabs" style={{ marginBottom: '10px' }}>
           <button
             onClick={() => setActiveTab('logReview')}
             className={`${
@@ -985,6 +988,7 @@ const App: React.FC = () => {
                 ? 'border-blue-500 text-blue-600'
                 : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
             } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium`}
+            style={{ marginLeft: '9px', paddingTop: '2px', paddingBottom: '0px', height: '24px' }}
           >
             Log Review
           </button>
@@ -995,6 +999,7 @@ const App: React.FC = () => {
                 ? 'border-blue-500 text-blue-600'
                 : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
             } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium`}
+            style={{ paddingTop: '2px', paddingBottom: '0px', height: '24px' }}
           >
             Filename Parser
           </button>
@@ -1005,6 +1010,7 @@ const App: React.FC = () => {
                 ? 'border-blue-500 text-blue-600'
                 : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
             } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium`}
+            style={{ height: '24px', paddingTop: '2px', paddingBottom: '0px' }}
           >
             Credits Creator
           </button>
@@ -1015,6 +1021,7 @@ const App: React.FC = () => {
                 ? 'border-blue-500 text-blue-600'
                 : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
             } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium`}
+            style={{ paddingTop: '2px', paddingBottom: '0px', marginLeft: '24px', height: '24px' }}
           >
             Contact Sheets
           </button>

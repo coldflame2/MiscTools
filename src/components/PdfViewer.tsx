@@ -19,12 +19,18 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ url, pageNumber }) => {
   useEffect(() => {
     let active = true;
     let renderTask: any = null;
+    setError(null);
 
     const renderPage = async () => {
       if (!url || !canvasRef.current) return;
       
       try {
-        const loadingTask = pdfjsLib.getDocument(url);
+        // Fetch the blob URL on the main thread to get the ArrayBuffer
+        const response = await fetch(url);
+        const arrayBuffer = await response.arrayBuffer();
+        if (!active) return;
+
+        const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) });
         const pdf = await loadingTask.promise;
         if (!active) return;
         
