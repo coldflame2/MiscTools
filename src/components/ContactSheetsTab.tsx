@@ -892,7 +892,7 @@ export const ContactSheetsTab: React.FC = () => {
       case 'minimal':
         return {
           wrapper: `border-b ${isDark ? 'border-slate-800' : 'border-slate-200'} pb-1.5 mb-2`,
-          title: `text-lg font-bold font-sans tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`,
+          title: `text-lg font-sans tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`,
           subtitle: `text-xs font-semibold font-sans tracking-wide uppercase ${isDark ? 'text-slate-400' : 'text-slate-500'}`,
           meta: ``
         };
