@@ -10,13 +10,16 @@
   },
   "dependencies": {
     "@google/genai": "^1.21.0",
+    "@react-pdf/renderer": "^4.5.1",
     "docx": "8.5.0",
     "file-saver": "2.0.5",
+    "html2pdf.js": "^0.14.0",
+    "jspdf": "^4.2.1",
     "jszip": "^3.10.1",
     "lucide-react": "^1.23.0",
     "mammoth": "1.8.0",
     "motion": "^12.42.2",
-    "pdfjs-dist": "4.4.168",
+    "pdfjs-dist": "^4.4.168",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

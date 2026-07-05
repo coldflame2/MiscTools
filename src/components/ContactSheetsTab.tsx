@@ -19,6 +19,7 @@ import {
   FileUp,
   Sliders,
   Type,
+  FileText,
   BookOpen,
   ChevronLeft,
   ChevronRight,
@@ -71,6 +72,8 @@ const CELL_BACKGROUND_COLORS = {
   black: 'bg-black'
 };
 
+import { PdfViewer } from './PdfViewer';
+
 export const ContactSheetsTab: React.FC = () => {
   const [settings, setSettings] = useState<ContactSheetSettings>(DEFAULT_SETTINGS);
   const [sheets, setSheets] = useState<ContactSheetPage[]>([]);
@@ -81,6 +84,9 @@ export const ContactSheetsTab: React.FC = () => {
   // Progress states for PDF generation
   const [pdfProgress, setPdfProgress] = useState<{ current: number; total: number } | null>(null);
   const [zipProgress, setZipProgress] = useState<{ current: number; total: number; message: string } | null>(null);
+  const [previewMode, setPreviewMode] = useState<'interactive' | 'pdf'>('pdf');
+  const [previewPdfUrl, setPreviewPdfUrl] = useState<string | null>(null);
+  const [isPreviewGenerating, setIsPreviewGenerating] = useState<boolean>(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [isExportDropdownOpen, setIsExportDropdownOpen] = useState(false);
   const exportDropdownRef = useRef<HTMLDivElement>(null);
@@ -97,6 +103,33 @@ export const ContactSheetsTab: React.FC = () => {
     }
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isExportDropdownOpen]);
+
+  const generatePreview = async () => {
+    if (sheets.length === 0) {
+      setPreviewPdfUrl(null);
+      return;
+    }
+    setIsPreviewGenerating(true);
+    try {
+      const { generatePdfBlob } = await import('./ContactSheetPDF');
+      const blob = await generatePdfBlob(sheets, settings);
+      const url = URL.createObjectURL(blob);
+      setPreviewPdfUrl(prev => {
+        if (prev) URL.revokeObjectURL(prev);
+        return url;
+      });
+    } catch (e) {
+      console.error('Failed to generate preview', e);
+    } finally {
+      setIsPreviewGenerating(false);
+    }
+  };
+
+  useEffect(() => {
+    if (previewMode === 'pdf' && !previewPdfUrl && sheets.length > 0 && !isLoading) {
+      generatePreview();
+    }
+  }, [previewMode, previewPdfUrl, sheets.length, isLoading]);
 
   // Sidebar and layout states
   const [isControlsCollapsed, setIsControlsCollapsed] = useState(false);
@@ -243,14 +276,57 @@ export const ContactSheetsTab: React.FC = () => {
     };
   }, [sheets]); // re-bind so handlers get fresh sheets context if needed
 
-  // Helper: Read single file or blob to base64 URL (highly optimized via browser-native thread)
-  const fileToDataUrl = (file: File | Blob): Promise<string> => {
-    return new Promise((resolve, reject) => {
+  // Helper: Read single file or blob to base64 URL, sniff mime type, and auto-convert unsupported formats (like WebP/GIF) to JPEG for PDF compat
+  const fileToDataUrl = async (file: File | Blob): Promise<string> => {
+    const buffer = await file.arrayBuffer();
+    let mimeType = 'image/jpeg';
+    const bytes = new Uint8Array(buffer.slice(0, 12));
+    
+    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
+      mimeType = 'image/png';
+    } else if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
+      mimeType = 'image/jpeg';
+    } else if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) {
+      mimeType = 'image/gif';
+    } else if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && 
+               bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
+      mimeType = 'image/webp';
+    } else if (file.type && file.type.startsWith('image/')) {
+      mimeType = file.type;
+    }
+
+    const blob = new Blob([buffer], { type: mimeType });
+    const rawDataUrl = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result as string);
       reader.onerror = reject;
-      reader.readAsDataURL(file);
+      reader.readAsDataURL(blob);
     });
+
+    // @react-pdf/renderer only supports PNG and JPEG. Convert WebP, GIF, or unknown to JPEG via Canvas.
+    if (mimeType !== 'image/png' && mimeType !== 'image/jpeg') {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+             resolve(rawDataUrl); // Fallback
+             return;
+          }
+          ctx.fillStyle = '#ffffff'; // White bg for transparent gifs
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0);
+          resolve(canvas.toDataURL('image/jpeg', 0.95));
+        };
+        img.onerror = () => resolve(rawDataUrl); // Fallback
+        img.src = rawDataUrl;
+      });
+    }
+
+    return rawDataUrl;
   };
 
   // Extract ZIP and group images based on folder structure rules
@@ -319,7 +395,8 @@ export const ContactSheetsTab: React.FC = () => {
         const entry = imageEntries[currentIdx];
         try {
           // Extract as Blob (extremely fast, browser-native decompressed)
-          const blob = await entry.zipEntry.async("blob");
+          let blob = await entry.zipEntry.async("blob");
+          
           // Convert Blob to Base64 (extremely fast, browser-native C++)
           const dataUrl = await fileToDataUrl(blob);
           
@@ -714,40 +791,20 @@ export const ContactSheetsTab: React.FC = () => {
   const handleExportSingle = async () => {
     if (sheets.length === 0) return;
     const currentSheet = sheets[activeSheetIndex];
-    const domId = `hidden-sheet-canvas-${activeSheetIndex}`;
-    
-    // @ts-ignore
-    const html2canvas = window.html2canvas;
-    // @ts-ignore
-    const { jsPDF } = window.jspdf;
-    
-    if (!html2canvas || !jsPDF) {
-      alert("PDF exporting libraries are currently loading. Please wait a few seconds and try again.");
-      return;
-    }
-
     setPdfProgress({ current: 0, total: 1 });
     try {
-      const element = document.getElementById(domId);
-      if (!element) throw new Error("Canvas element not found in DOM.");
-
-      const canvas = await html2canvas(element, {
-        scale: 2, // High fidelity print scale
-        useCORS: true,
-        allowTaint: true,
-        backgroundColor: null
-      });
-
-      const imgData = canvas.toDataURL('image/jpeg', 0.95);
-      const pdf = new jsPDF({
-        orientation: 'portrait',
-        unit: 'in',
-        format: [12, 12]
-      });
-
-      pdf.addImage(imgData, 'JPEG', 0, 0, 12, 12);
+      const { generatePdfBlob } = await import('./ContactSheetPDF');
+      const blob = await generatePdfBlob([currentSheet], settings);
+      
       const filename = currentSheet.folderName.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-      pdf.save(`contact_sheet_${filename}.pdf`);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `contact_sheet_${filename}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     } catch (e) {
       console.error(e);
       alert("Failed to render PDF: " + (e instanceof Error ? e.message : "Unknown error"));
@@ -759,49 +816,21 @@ export const ContactSheetsTab: React.FC = () => {
   const handleExportPortfolio = async () => {
     if (sheets.length === 0) return;
     
-    // @ts-ignore
-    const html2canvas = window.html2canvas;
-    // @ts-ignore
-    const { jsPDF } = window.jspdf;
-    
-    if (!html2canvas || !jsPDF) {
-      alert("PDF exporting libraries are currently loading. Please wait a few seconds and try again.");
-      return;
-    }
-
-    const total = sheets.length;
-    setPdfProgress({ current: 0, total });
-
+    setPdfProgress({ current: 0, total: sheets.length });
     try {
-      const pdf = new jsPDF({
-        orientation: 'portrait',
-        unit: 'in',
-        format: [12, 12]
-      });
-
-      for (let i = 0; i < total; i++) {
-        setPdfProgress({ current: i, total });
-        const domId = `hidden-sheet-canvas-${i}`;
-        const element = document.getElementById(domId);
-        
-        if (!element) continue;
-
-        const canvas = await html2canvas(element, {
-          scale: 2,
-          useCORS: true,
-          allowTaint: true,
-          backgroundColor: null
-        });
-
-        const imgData = canvas.toDataURL('image/jpeg', 0.95);
-        if (i > 0) {
-          pdf.addPage([12, 12], 'portrait');
-        }
-        pdf.addImage(imgData, 'JPEG', 0, 0, 12, 12);
-      }
-
-      setPdfProgress({ current: total, total });
-      pdf.save(`research_specifications_portfolio.pdf`);
+      const { generatePdfBlob } = await import('./ContactSheetPDF');
+      setPdfProgress({ current: Math.floor(sheets.length / 2), total: sheets.length });
+      const blob = await generatePdfBlob(sheets, settings);
+      
+      setPdfProgress({ current: sheets.length, total: sheets.length });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `research_specifications_portfolio.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     } catch (e) {
       console.error(e);
       alert("Failed to render portfolio PDF: " + (e instanceof Error ? e.message : "Unknown error"));
@@ -809,19 +838,10 @@ export const ContactSheetsTab: React.FC = () => {
       setPdfProgress(null);
     }
   };
+
   const handleExportAllZip = async () => {
     if (specGroups.length === 0) return;
     
-    // @ts-ignore
-    const html2canvas = window.html2canvas;
-    // @ts-ignore
-    const { jsPDF } = window.jspdf;
-    
-    if (!html2canvas || !jsPDF) {
-      alert("PDF exporting libraries are currently loading. Please wait a few seconds and try again.");
-      return;
-    }
-
     const JSZip = (await import('jszip')).default;
     const zip = new JSZip();
 
@@ -830,38 +850,16 @@ export const ContactSheetsTab: React.FC = () => {
 
     try {
       let currentProgress = 0;
+      const { generatePdfBlob } = await import('./ContactSheetPDF');
 
       for (const group of specGroups) {
-        const groupPdf = new jsPDF({
-          orientation: 'portrait',
-          unit: 'in',
-          format: [12, 12]
-        });
-
-        for (let i = 0; i < group.pages.length; i++) {
-          const page = group.pages[i];
-          setPdfProgress({ current: currentProgress++, total });
-          
-          const domId = `hidden-sheet-canvas-${page.sheetIndex}`;
-          const element = document.getElementById(domId);
-          if (!element) continue;
-
-          const canvas = await html2canvas(element, {
-            scale: 2,
-            useCORS: true,
-            allowTaint: true,
-            backgroundColor: null
-          });
-
-          const imgData = canvas.toDataURL('image/jpeg', 0.95);
-          if (i > 0) {
-            groupPdf.addPage([12, 12], 'portrait');
-          }
-          groupPdf.addImage(imgData, 'JPEG', 0, 0, 12, 12);
-        }
-
+        const groupSheets = group.pages.map(p => p.sheet);
+        const pdfBlob = await generatePdfBlob(groupSheets, settings);
+        
+        currentProgress += group.pages.length;
+        setPdfProgress({ current: currentProgress, total });
+        
         const filename = group.specName.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-        const pdfBlob = groupPdf.output('blob');
         zip.file(`contact_sheet_${filename}.pdf`, pdfBlob);
       }
       
@@ -892,7 +890,7 @@ export const ContactSheetsTab: React.FC = () => {
       case 'minimal':
         return {
           wrapper: `border-b ${isDark ? 'border-slate-800' : 'border-slate-200'} pb-1.5 mb-2`,
-          title: `text-lg font-sans tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`,
+          title: `text-lg font-bold font-sans tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`,
           subtitle: `text-xs font-semibold font-sans tracking-wide uppercase ${isDark ? 'text-slate-400' : 'text-slate-500'}`,
           meta: ``
         };
@@ -981,8 +979,8 @@ export const ContactSheetsTab: React.FC = () => {
 
       {/* PDF Generation Overlay */}
       {pdfProgress !== null && (
-        <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full text-center">
+        <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-2">
+          <div className="bg-white rounded-xl shadow-2xl p-2 max-w-sm w-full text-center">
             <div className="relative w-16 h-16 mx-auto mb-4">
               <div className="absolute inset-0 border-4 border-blue-200 rounded-full"></div>
               <div className="absolute inset-0 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
@@ -1040,17 +1038,50 @@ export const ContactSheetsTab: React.FC = () => {
       )}
 
       {/* Primary Toolbar */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 py-2 px-4 border-b border-slate-200 bg-white/95 backdrop-blur-sm sticky top-0 z-40">
+      <div className="flex items-center justify-between gap-2 py-1 px-4 border-b border-slate-200 bg-white/95 backdrop-blur-sm sticky top-0 z-40">
         <div className="flex items-center gap-2 flex-1">
           <Layers className="w-5 h-5 text-blue-600" />
-          <h2 className="text-base font-bold tracking-tight text-slate-900">
+          <h2 className="text-sm font-bold tracking-tight text-slate-900">
             Contact Sheets Workspace
           </h2>
         </div>
 
-        {sheets.length > 1 && (
-          <div className="flex items-center justify-center flex-1">
-            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200">
+        <div className="flex items-center justify-center flex-1">
+          <div className="flex items-center gap-2">
+            <div className="bg-slate-100 p-1 rounded-md flex gap-1 border border-slate-200 h-[32px]">
+              <button 
+                onClick={() => setPreviewMode('interactive')}
+                className={`px-3 py-1 rounded text-xs font-medium transition-colors ${previewMode === 'interactive' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                Interactive Editor
+              </button>
+              <button 
+                onClick={() => {
+                  setPreviewMode('pdf');
+                  if (!previewPdfUrl) generatePreview();
+                }}
+                className={`px-3 py-1 rounded text-xs font-medium transition-colors flex items-center gap-1.5 ${previewMode === 'pdf' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                True PDF Preview
+              </button>
+            </div>
+            {previewMode === 'pdf' && (
+              <button 
+                onClick={generatePreview}
+                disabled={isPreviewGenerating || sheets.length === 0}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-2.5 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-50 flex items-center gap-1.5 shadow-sm h-[32px]"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isPreviewGenerating ? 'animate-spin' : ''}`} />
+                Update
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 flex-1">
+          {sheets.length > 1 && (
+            <div className="flex items-center gap-0.5 bg-slate-100 p-0.5 rounded-md border border-slate-200 h-[32px]">
               <button
                 onClick={() => scrollToPage(Math.max(0, activeSheetIndex - 1))}
                 disabled={activeSheetIndex === 0}
@@ -1059,19 +1090,19 @@ export const ContactSheetsTab: React.FC = () => {
               >
                 <ArrowLeft className="w-3.5 h-3.5" />
               </button>
-              <div className="relative flex items-center">
+              <div className="relative flex items-center h-full">
                 <select
                   value={activeSheetIndex}
                   onChange={(e) => scrollToPage(parseInt(e.target.value))}
-                  className="text-xs font-semibold bg-transparent border-none text-slate-700 py-0.5 pl-2 pr-6 focus:outline-none focus:ring-0 cursor-pointer min-w-[120px] max-w-[200px] appearance-none truncate"
+                  className="text-xs font-medium bg-transparent border-none text-slate-700 py-0.5 pl-2 pr-5 focus:outline-none focus:ring-0 cursor-pointer appearance-none h-full"
                 >
                   {sheets.map((sheet, index) => (
                     <option key={sheet.id} value={index}>
-                      Page {index + 1}: {sheet.folderName}
+                      Page {index + 1}
                     </option>
                   ))}
                 </select>
-                <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-1.5 pointer-events-none" />
+                <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-1 pointer-events-none" />
               </div>
               <button
                 onClick={() => scrollToPage(Math.min(sheets.length - 1, activeSheetIndex + 1))}
@@ -1082,27 +1113,25 @@ export const ContactSheetsTab: React.FC = () => {
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>
-          </div>
-        )}
+          )}
 
-        <div className="flex flex-wrap items-center justify-end gap-2 flex-1">
           {sheets.length > 0 && (
             <>
-              <div className="relative flex items-center" ref={exportDropdownRef}>
-                <div className="flex rounded-lg shadow-sm">
+              <div className="relative flex items-center h-[32px]" ref={exportDropdownRef}>
+                <div className="flex rounded-md shadow-sm h-full">
                   <button
                     onClick={handleExportSingle}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold rounded-l-lg text-sm transition-colors border-r-0"
+                    className="flex items-center gap-1.5 px-2.5 py-1 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-medium rounded-l-md text-xs transition-colors border-r-0 h-full"
                     title="Download current sheet as a standalone 12x12 PDF"
                   >
-                    <Download className="w-4 h-4" />
+                    <Download className="w-3.5 h-3.5" />
                     <span>Export Current</span>
                   </button>
                   <button
                     onClick={() => setIsExportDropdownOpen(!isExportDropdownOpen)}
-                    className={`flex items-center justify-center px-2 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-r-lg transition-colors ${isExportDropdownOpen ? 'bg-slate-100' : ''}`}
+                    className={`flex items-center justify-center px-1.5 py-1 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-r-md transition-colors h-full ${isExportDropdownOpen ? 'bg-slate-100' : ''}`}
                   >
-                    <ChevronDown className="w-4 h-4" />
+                    <ChevronDown className="w-3.5 h-3.5" />
                   </button>
                 </div>
 
@@ -1148,7 +1177,7 @@ export const ContactSheetsTab: React.FC = () => {
 
               <button
                 onClick={() => setShowClearConfirm(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 border border-rose-200 hover:bg-rose-100 text-rose-700 font-semibold rounded-lg text-xs transition-colors"
+                className="flex items-center gap-1.5 px-2.5 py-1 bg-rose-50 border border-rose-200 hover:bg-rose-100 text-rose-700 font-medium rounded-md text-xs transition-colors h-[32px]"
                 title="Clear current workspace and reset to defaults"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -1574,9 +1603,27 @@ export const ContactSheetsTab: React.FC = () => {
       <main className="flex-grow flex flex-col min-w-0 bg-slate-100 overflow-hidden relative">
 
         {/* Core Interactive Specification Preview */}
+        {previewMode === 'pdf' ? (
+          <div className="flex-grow relative overflow-hidden bg-slate-300 flex items-center justify-center p-0">
+            {previewPdfUrl ? (
+                <PdfViewer url={previewPdfUrl} pageNumber={activeSheetIndex + 1} />
+            ) : (
+              <div className="text-slate-500 flex flex-col items-center">
+                 {sheets.length > 0 ? (
+                   <>
+                     <RefreshCw className="w-8 h-8 animate-spin mb-4" />
+                     <p>Generating PDF Preview...</p>
+                   </>
+                 ) : (
+                   <p>Upload files to start.</p>
+                 )}
+              </div>
+            )}
+          </div>
+        ) : (
         <div 
           ref={workspaceScrollRef}
-          className="flex-grow pt-8 pb-8 px-4 sm:pt-10 sm:pb-12 sm:px-8 overflow-y-auto flex flex-col items-center gap-16 min-h-[500px]"
+          className="flex-grow pt-2 pb-8 px-4 sm:pb-12 sm:px-8 overflow-y-auto flex flex-col items-center gap-8 min-h-[500px]"
           style={{ scrollBehavior: 'smooth' }}
         >
           {sheets.map((sheet, index) => {
@@ -1765,128 +1812,8 @@ export const ContactSheetsTab: React.FC = () => {
             );
           })}
         </div>
+        )}
 
-        {/* Hidden Offscreen Render Wrapper (stores all pages of portfolio so pdf rendering grabs every DOM sheet) */}
-            <div className="absolute top-0 left-0 w-0 h-0 overflow-hidden pointer-events-none">
-              {sheets.map((sheet, index) => {
-                const group = specGroups.find(g => g.pages.some(p => p.sheetIndex === index));
-                const cleanFolderName = group?.specName || sheet.folderName.replace(/\s\(Part\s\d+\)$/, "");
-
-                return (
-                <div key={`hidden-sheet-${sheet.id}`} className="w-[1152px] h-[1152px]">
-                  <div 
-                    id={`hidden-sheet-canvas-${index}`}
-                    className={`w-[1152px] h-[1152px] p-6 flex flex-col justify-between ${BACKGROUND_COLORS[settings.backgroundCanvas]}`}
-                    style={{
-                      boxSizing: 'border-box'
-                    }}
-                  >
-                    {/* BRANDING HEADER */}
-                    <header className={headerTheme.wrapper}>
-                      {settings.headerStyle === 'minimal' ? (
-                        <div className="flex justify-between items-baseline w-full">
-                          <span className={`text-3xl font-bold font-sans tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                            {cleanFolderName}
-                          </span>
-                          <span className={`text-lg font-semibold font-sans tracking-wide uppercase ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                            {settings.minimalRightTitle || 'Photo Research'}
-                          </span>
-                        </div>
-                      ) : settings.headerStyle === 'academic' ? (
-                        <>
-                          <div>
-                            <h4 className={headerTheme.title}>{settings.customTitle}</h4>
-                            <p className={headerTheme.subtitle}>{settings.customSubtitle}</p>
-                          </div>
-                          <div className={headerTheme.meta}>
-                            <div><strong>Folder:</strong> {cleanFolderName}</div>
-                            <div><strong>Date:</strong> {settings.customDate}</div>
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <h4 className={headerTheme.title}>{settings.customTitle}</h4>
-                          <div className="flex justify-between items-end">
-                            <p className={headerTheme.subtitle}>{settings.customSubtitle}</p>
-                            <span className={headerTheme.meta || 'text-xs text-slate-400 font-mono'}>
-                              Folder: {cleanFolderName} | {settings.customDate}
-                            </span>
-                          </div>
-                        </>
-                      )}
-                    </header>
-
-                    <div className="flex-grow grid grid-cols-5 grid-rows-5 gap-3 items-stretch justify-items-stretch min-h-0 mt-4 mb-4">
-                      {Array.from({ length: 25 }).map((_, slotIndex) => {
-                        const image = sheet.images[slotIndex];
-                        if (!image) {
-                          return (                            <div 
-                              key={`hidden-empty-${slotIndex}`}
-                              className={`h-full min-h-0 rounded-md ${
-                                isDark 
-                                  ? 'bg-slate-900/10' 
-                                  : CELL_BACKGROUND_COLORS[settings.cellBackgroundColor as keyof typeof CELL_BACKGROUND_COLORS]
-                              }`}
-                            />
-                          );
-                        }
-
-                        return (
-                          <div 
-                            key={`hidden-img-${image.id}`}
-                            className={`h-full min-h-0 min-w-0 rounded flex flex-col justify-between overflow-hidden ${
-                              isDark 
-                                ? 'bg-slate-950/20' 
-                                : CELL_BACKGROUND_COLORS[settings.cellBackgroundColor as keyof typeof CELL_BACKGROUND_COLORS]
-                            }`}
-                          >
-                            <div className="flex-grow w-full h-0 relative flex items-center justify-center overflow-hidden min-h-0">
-                              <img
-                                src={image.dataUrl}
-                                alt={image.name}
-                                className={`w-full h-full ${
-                                  settings.imageFit === 'contain' 
-                                    ? 'object-contain object-center' 
-                                    : 'object-cover object-center'
-                                }`}
-                                referrerPolicy="no-referrer"
-                              />
-                            </div>
-                            {settings.showLabels && (
-                              <div 
-                                className={`py-1 px-1 text-center break-all overflow-hidden bg-transparent flex flex-col justify-center items-center`}
-                                style={{ 
-                                  fontSize: `${settings.labelFontSize}px`,
-                                  color: settings.labelColor,
-                                  fontFamily: settings.labelFontFamily,
-                                  fontWeight: settings.labelFontWeight,
-                                  lineHeight: '1.2'
-                                }}
-                              >
-                                {image.name.replace(/\.[^/.]+$/, "")}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {settings.showFooter && (
-                      <footer className={`border-t pt-3 mt-3 flex justify-between items-center text-sm font-sans ${
-                        isDark ? 'border-slate-800 text-slate-400' : 'border-slate-200 text-slate-400'
-                      }`}>
-                        <span>{settings.footerCustomText}</span>
-                        {settings.footerShowPageNumber && (
-                          <span className={`font-semibold ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                            Page {index + 1} of {sheets.length}
-                          </span>
-                        )}
-                      </footer>
-                    )}
-                  </div>
-                </div>
-              )})}
-            </div>
 
           </main>
 
