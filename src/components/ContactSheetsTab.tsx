@@ -1217,18 +1217,18 @@ export const ContactSheetsTab: React.FC = () => {
         </div>
       ) : sheets.length === 0 ? (
         /* Empty State Landing / Upload Initial Workspace */
-        <div className="flex-grow flex flex-col items-center justify-center p-8 max-w-2xl mx-auto text-center my-12">
-          <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mb-6 border border-blue-100">
+        <div className="flex-grow flex flex-col items-center justify-center p-1 max-w-2xl mx-auto text-center mt-2 mb-12">
+          <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mb-4 border border-blue-100">
             <Upload className="w-8 h-8" />
           </div>
           
-          <h3 className="text-xl font-bold text-slate-900">Establish Your Contact Sheet Portfolio</h3>
-          <p className="text-slate-600 text-sm mt-2 max-w-md">
-            Import images directly or select ZIP archives containing photo folders. 
-            Folders will automatically compile into independent 12×12-inch visual research specifications.
+          <h3 className="text-xl font-bold text-slate-900">Upload</h3>
+          <p className="text-slate-600 text-sm mt-1 max-w-md">
+            Import ZIP archives containing photo folders. 
+            Folders will automatically compile into 12×12-inch grid.
           </p>
 
-          <div className="mt-8 flex flex-col sm:flex-row gap-4 justify-center w-full max-w-md">
+          <div className="mt-4 flex flex-col sm:flex-row gap-1 justify-center w-full max-w-md">
             <div 
               onClick={() => zipInputRef.current?.click()}
               className="flex-1 cursor-pointer p-5 border border-dashed border-slate-300 hover:border-blue-500 rounded-xl bg-white hover:bg-blue-50/50 transition-all text-center flex flex-col items-center justify-center group"
@@ -1263,10 +1263,6 @@ export const ContactSheetsTab: React.FC = () => {
             </div>
           </div>
 
-          <div className="mt-8 text-xs text-slate-400 flex items-center gap-1.5 justify-center">
-            <Info className="w-4 h-4" />
-            <span>Workspace supports client-side persistence and high-fidelity PDF exports</span>
-          </div>
         </div>
       ) : (
         /* Workspace Screen */

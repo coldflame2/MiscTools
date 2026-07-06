@@ -162,8 +162,37 @@ const App: React.FC = () => {
   const [activeView, setActiveView] = useState<ActiveView>('credits');
   const [headerRowIndex, setHeaderRowIndex] = useState(-1);
   const [columnIndices, setColumnIndices] = useState<HeaderIndices | null>(null);
-  const [activeTab, setActiveTab] = useState<'logReview' | 'newFeature' | 'creditsCreator' | 'contactSheets'>('logReview');
+  const [activeTab, setActiveTab] = useState<'logReview' | 'newFeature' | 'creditsCreator' | 'contactSheets'>('contactSheets');
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
 
+  const handlePasswordSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (passwordInput === 'paradise' || passwordInput === 'paradise.') {
+      setIsAuthenticated(true);
+      setPasswordInput('');
+    } else {
+      alert('Incorrect password');
+    }
+  };
+
+  const renderPasswordForm = () => (
+    <div className="flex flex-col items-center justify-center py-20">
+      <h2 className="text-xl font-semibold text-slate-700 mb-4">Restricted Access</h2>
+      <form onSubmit={handlePasswordSubmit} className="flex gap-2">
+        <input 
+          type="password" 
+          value={passwordInput}
+          onChange={(e) => setPasswordInput(e.target.value)}
+          className="border border-slate-300 rounded px-3 py-2 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+          placeholder="Enter password"
+        />
+        <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors">
+          Submit
+        </button>
+      </form>
+    </div>
+  );
 
   const handleReset = () => {
     setStatus('idle');
@@ -982,15 +1011,15 @@ const App: React.FC = () => {
       <div className="border-b border-slate-200" style={{ marginBottom: '1px', height: '25.957099999999997px' }}>
         <nav className="-mb-px flex space-x-6" aria-label="Tabs" style={{ marginBottom: '10px' }}>
           <button
-            onClick={() => setActiveTab('logReview')}
+            onClick={() => setActiveTab('contactSheets')}
             className={`${
-              activeTab === 'logReview'
+              activeTab === 'contactSheets'
                 ? 'border-blue-500 text-blue-600'
                 : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
             } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium`}
             style={{ marginLeft: '9px', paddingTop: '2px', paddingBottom: '0px', height: '24px' }}
           >
-            Log Review
+            Contact Sheets
           </button>
           <button
             onClick={() => setActiveTab('newFeature')}
@@ -1015,54 +1044,58 @@ const App: React.FC = () => {
             Credits Creator
           </button>
           <button
-            onClick={() => setActiveTab('contactSheets')}
+            onClick={() => setActiveTab('logReview')}
             className={`${
-              activeTab === 'contactSheets'
+              activeTab === 'logReview'
                 ? 'border-blue-500 text-blue-600'
                 : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
             } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium`}
-            style={{ paddingTop: '2px', paddingBottom: '0px', marginLeft: '24px', height: '24px' }}
+            style={{ paddingTop: '2px', paddingBottom: '0px', height: '24px' }}
           >
-            Contact Sheets
+            LR
           </button>
         </nav>
       </div>
 
       {activeTab === 'logReview' && (
-        <>
-          <header className="mb-2 flex justify-between items-center">
-            <div className="flex items-center gap-4">
-              <DropdownMenu items={menuItems} />
-              <div className="text-left">
-                <h1 className="text-3xl font-bold text-slate-800">A.M.H</h1>
-                <p className="text-slate-500"></p>
-              </div>
-            </div>
-            {status === 'success' && (
-              <div className="flex items-center gap-6">
-                <div className="text-right min-w-0">
-                  {isbn && title && (
-                    <p
-                      className="text-lg font-semibold text-slate-800 truncate max-w-lg"
-                      title={`${isbn}_${title}`}
-                    >
-                      {`${isbn}_${title}`}
-                    </p>
-                  )}
+        isAuthenticated ? (
+          <>
+            <header className="mb-2 flex justify-between items-center">
+              <div className="flex items-center gap-4">
+                <DropdownMenu items={menuItems} />
+                <div className="text-left">
+                  <h1 className="text-3xl font-bold text-slate-800">A.M.H</h1>
+                  <p className="text-slate-500"></p>
                 </div>
-                <ActionsHeader 
-                  isMerging={isMerging}
-                  copyStatus={copyStatus}
-                  contactSheetStatus={contactSheetStatus}
-                  imageAnalysisResults={imageAnalysisResults}
-                  onMergeAndDownload={handleMergeAndDownload}
-                  onCopy={handleCopy}
-                />
               </div>
-            )}
-          </header>
-          {renderContent()}
-        </>
+              {status === 'success' && (
+                <div className="flex items-center gap-6">
+                  <div className="text-right min-w-0">
+                    {isbn && title && (
+                      <p
+                        className="text-lg font-semibold text-slate-800 truncate max-w-lg"
+                        title={`${isbn}_${title}`}
+                      >
+                        {`${isbn}_${title}`}
+                      </p>
+                    )}
+                  </div>
+                  <ActionsHeader 
+                    isMerging={isMerging}
+                    copyStatus={copyStatus}
+                    contactSheetStatus={contactSheetStatus}
+                    imageAnalysisResults={imageAnalysisResults}
+                    onMergeAndDownload={handleMergeAndDownload}
+                    onCopy={handleCopy}
+                  />
+                </div>
+              )}
+            </header>
+            {renderContent()}
+          </>
+        ) : (
+          renderPasswordForm()
+        )
       )}
 
       {activeTab === 'newFeature' && <FilenameParser />}
