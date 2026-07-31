@@ -57,7 +57,12 @@ const DEFAULT_SETTINGS: ContactSheetSettings = {
   headerFontSize: 14,
   headerColor: '#000000',
   headerFontFamily: 'Calibri, sans-serif',
-  headerFontWeight: 'bold'
+  headerFontWeight: 'bold',
+  pageSize: 'A4',
+  pageOrientation: 'portrait',
+  pageMargin: 'narrow',
+  gridRows: 5,
+  gridCols: 4
 };
 
 const BACKGROUND_COLORS = {
@@ -225,6 +230,11 @@ export const ContactSheetsTab: React.FC = () => {
   const zipInputRef = useRef<HTMLInputElement>(null);
   const appendInputRef = useRef<HTMLInputElement>(null);
 
+  const getCleanSpecName = useCallback((sheet: ContactSheetPage) => {
+    const raw = sheet.specName || sheet.folderName || 'Unnamed spec.';
+    return raw.replace(/\s*\(Part\s*\d+(?:\s*of\s*\d+)?\)$/i, '').trim() || 'Unnamed spec.';
+  }, []);
+
   // Load from IndexedDB on Mount
   useEffect(() => {
     const initWorkspace = async () => {
@@ -232,7 +242,16 @@ export const ContactSheetsTab: React.FC = () => {
       try {
         const loadedSettings = await loadSettings();
         if (loadedSettings) {
-          setSettings({ ...DEFAULT_SETTINGS, ...loadedSettings });
+          const merged = { ...DEFAULT_SETTINGS, ...loadedSettings };
+          if (loadedSettings.pageSize === '12x12') merged.pageSize = 'A4';
+          if (!loadedSettings.pageMargin) merged.pageMargin = 'narrow';
+          if (!loadedSettings.gridRows || (loadedSettings.gridRows === 4 && loadedSettings.gridCols === 3)) {
+            merged.gridRows = 5;
+            merged.gridCols = 4;
+          }
+          setSettings(merged);
+        } else {
+          setSettings(DEFAULT_SETTINGS);
         }
         const loadedSheets = await loadSheets();
         if (loadedSheets && loadedSheets.length > 0) {
@@ -259,6 +278,74 @@ export const ContactSheetsTab: React.FC = () => {
       saveSheets(sheets).catch(err => console.error('Failed to auto-save sheets:', err));
     }
   }, [sheets, isLoading]);
+
+  // Reflow sheets when grid size changes or sheet items mismatch capacity
+  useEffect(() => {
+    if (isLoading || sheets.length === 0) return;
+    
+    const capacity = (settings.gridRows || 5) * (settings.gridCols || 4);
+    if (capacity <= 0) return;
+    
+    let needsReflow = false;
+    for (let i = 0; i < sheets.length; i++) {
+      if (sheets[i].images.length > capacity) {
+        needsReflow = true;
+        break;
+      }
+      if (sheets[i].images.length < capacity && i < sheets.length - 1) {
+        const curName = getCleanSpecName(sheets[i]);
+        const nextName = getCleanSpecName(sheets[i + 1]);
+        if (curName === nextName) {
+          needsReflow = true;
+          break;
+        }
+      }
+      if (/\s*\(Part\s*\d+/i.test(sheets[i].folderName) || /\s*\(Part\s*\d+/i.test(sheets[i].specName || '')) {
+        needsReflow = true;
+        break;
+      }
+    }
+    
+    if (needsReflow) {
+      const newSheets: ContactSheetPage[] = [];
+      let currentGroupImages: SheetImage[] = [];
+      let currentSpec = '';
+      
+      const flushGroup = () => {
+        if (currentGroupImages.length === 0) return;
+        for (let i = 0; i < currentGroupImages.length; i += capacity) {
+          const chunk = currentGroupImages.slice(i, i + capacity);
+          const partNum = Math.floor(i / capacity) + 1;
+          newSheets.push({
+            id: `sheet-${currentSpec.replace(/[^a-z0-9]+/gi, '-')}-${i}-${Date.now()}-${Math.random()}`,
+            folderName: currentSpec,
+            specName: currentSpec,
+            partNumber: partNum,
+            images: chunk
+          });
+        }
+      };
+      
+      for (const sheet of sheets) {
+        const cleanName = getCleanSpecName(sheet);
+        if (cleanName !== currentSpec) {
+          if (currentGroupImages.length > 0) flushGroup();
+          currentSpec = cleanName;
+          currentGroupImages = [...sheet.images];
+        } else {
+          currentGroupImages.push(...sheet.images);
+        }
+      }
+      if (currentGroupImages.length > 0) flushGroup();
+      
+      setSheets(newSheets);
+      
+      if (activeSheetIndex >= newSheets.length) {
+        setActiveSheetIndex(Math.max(0, newSheets.length - 1));
+      }
+    }
+  }, [settings.gridRows, settings.gridCols, isLoading, sheets, getCleanSpecName]);
+
 
   // Global Drag and Drop event handlers
   const handleDragEnter = (e: DragEvent) => {
@@ -535,24 +622,22 @@ export const ContactSheetsTab: React.FC = () => {
       }
 
       const newSheets: ContactSheetPage[] = [];
+      const currentGridCapacity = (settings.gridRows || 5) * (settings.gridCols || 4);
 
       // 1. Create sheets from ZIP folders
       for (const page of allZipPages) {
         const filesList = page.images;
-        const folderName = page.folderName;
-        // Split images into standard pages of 25 (5x5) if needed
-        const chunkSize = 25;
+        const rawName = page.folderName || "Unnamed spec.";
+        const cleanName = rawName.replace(/\s*\(Part\s*\d+(?:\s*of\s*\d+)?\)$/i, '').trim() || "Unnamed spec.";
+        const chunkSize = currentGridCapacity;
         for (let i = 0; i < filesList.length; i += chunkSize) {
           const chunk = filesList.slice(i, i + chunkSize);
           const partNum = Math.floor(i / chunkSize) + 1;
-          const displayFolderName = filesList.length > chunkSize 
-            ? `${folderName} (Part ${partNum})` 
-            : folderName;
             
           newSheets.push({
-            id: `zip-${folderName}-${i}-${Date.now()}-${Math.random()}`,
-            folderName: displayFolderName,
-            specName: folderName,
+            id: `zip-${cleanName}-${i}-${Date.now()}-${Math.random()}`,
+            folderName: cleanName,
+            specName: cleanName,
             partNumber: partNum,
             images: chunk.map((img, index) => ({
               id: `img-${Date.now()}-${index}-${Math.random()}`,
@@ -565,18 +650,16 @@ export const ContactSheetsTab: React.FC = () => {
 
       // 2. Create sheets from direct images
       if (imagesToGroup.length > 0) {
-        const chunkSize = 25;
+        const cleanName = "Direct Selection";
+        const chunkSize = currentGridCapacity;
         for (let i = 0; i < imagesToGroup.length; i += chunkSize) {
           const chunk = imagesToGroup.slice(i, i + chunkSize);
           const partNum = Math.floor(i / chunkSize) + 1;
-          const displayFolderName = imagesToGroup.length > chunkSize 
-            ? `Direct Selection (Part ${partNum})` 
-            : `Direct Selection`;
 
           newSheets.push({
             id: `direct-${i}-${Date.now()}`,
-            folderName: displayFolderName,
-            specName: `Direct Selection`,
+            folderName: cleanName,
+            specName: cleanName,
             partNumber: partNum,
             images: chunk.map((img, index) => ({
               id: `img-${Date.now()}-${index}-${Math.random()}`,
@@ -1563,8 +1646,79 @@ export const ContactSheetsTab: React.FC = () => {
               </div>
 
 
+              {/* Page Layout & Grid */}
+              <div className="space-y-3 pt-3 border-t border-slate-100">
+                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 mb-2">
+                  <BookOpen className="w-3.5 h-3.5 text-slate-400" />
+                  Page Layout & Grid
+                </label>
+                
+                <div>
+                  <label className="text-xs text-slate-600 mb-1 block">Page Size</label>
+                  <select
+                    value={settings.pageSize || '12x12'}
+                    onChange={(e) => setSettings(prev => ({ ...prev, pageSize: e.target.value as any }))}
+                    className="w-full text-xs px-3 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                  >
+                    <option value="12x12">12x12 (Square)</option>
+                    <option value="A4">A4</option>
+                    <option value="Letter">Letter</option>
+                  </select>
+                </div>
+                
+                <div>
+                  <label className="text-xs text-slate-600 mb-1 block">Orientation</label>
+                  <select
+                    value={settings.pageOrientation || 'portrait'}
+                    onChange={(e) => setSettings(prev => ({ ...prev, pageOrientation: e.target.value as any }))}
+                    className="w-full text-xs px-3 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                  >
+                    <option value="portrait">Portrait</option>
+                    <option value="landscape">Landscape</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs text-slate-600 mb-1 block">Page Margins</label>
+                  <select
+                    value={settings.pageMargin || 'normal'}
+                    onChange={(e) => setSettings(prev => ({ ...prev, pageMargin: e.target.value as any }))}
+                    className="w-full text-xs px-3 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                  >
+                    <option value="narrow">Narrow (1/4 in)</option>
+                    <option value="normal">Normal (1/2 in)</option>
+                    <option value="wide">Wide (1 in)</option>
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs text-slate-600 mb-1 block">Grid Rows</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="10"
+                      value={settings.gridRows || 5}
+                      onChange={(e) => setSettings(prev => ({ ...prev, gridRows: parseInt(e.target.value) || 5 }))}
+                      className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-600 mb-1 block">Grid Cols</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="10"
+                      value={settings.gridCols || 4}
+                      onChange={(e) => setSettings(prev => ({ ...prev, gridCols: parseInt(e.target.value) || 4 }))}
+                      className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                </div>
+              </div>
+
               {/* Fit modes */}
-              <div>
+              <div className="pt-3 border-t border-slate-100">
                 <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 mb-2">
                   <Grid className="w-3.5 h-3.5 text-slate-400" />
                   Image Aspect Fit
@@ -1780,13 +1934,19 @@ export const ContactSheetsTab: React.FC = () => {
                 {/* Part indicator overlay on top center */}
                 {isMultiPage && (
                   <div className="absolute -top-7 left-1/2 transform -translate-x-1/2 bg-slate-200 text-slate-600 font-sans text-[11px] font-bold px-3 py-1 rounded-t-lg border border-b-0 border-slate-300 shadow-sm z-20">
-                    PART {pIdx + 1}
+                    PART {pIdx + 1} OF {group?.pages.length}
                   </div>
                 )}
 
-                {/* 12x12-inch Canvas Aspect Block */}
+                {/* Canvas Aspect Block */}
                 <div 
-                  className={`w-full aspect-square p-4 sm:p-6 flex flex-col justify-between ${BACKGROUND_COLORS[settings.backgroundCanvas]} select-none border border-slate-300 rounded-lg overflow-hidden`}
+                  className={`w-full ${
+                    settings.pageSize === 'A4'
+                      ? (settings.pageOrientation === 'landscape' ? 'aspect-[1.414/1]' : 'aspect-[1/1.414]')
+                      : settings.pageSize === 'Letter'
+                      ? (settings.pageOrientation === 'landscape' ? 'aspect-[11/8.5]' : 'aspect-[8.5/11]')
+                      : 'aspect-square'
+                  } p-4 sm:p-6 flex flex-col justify-between ${BACKGROUND_COLORS[settings.backgroundCanvas]} select-none border border-slate-300 rounded-lg overflow-hidden`}
                   style={{
                     boxSizing: 'border-box'
                   }}
@@ -1905,15 +2065,21 @@ export const ContactSheetsTab: React.FC = () => {
                     )}
                   </header>
 
-                  {/* 5x5 ASSETS GRID */}
-                  <div className="flex-grow grid grid-cols-5 grid-rows-5 gap-2 items-stretch justify-items-stretch min-h-0 mt-2 mb-2">
+                  {/* DYNAMIC ASSETS GRID */}
+                  <div 
+                    className="flex-grow grid gap-2 items-stretch justify-items-stretch min-h-0 mt-2 mb-2"
+                    style={{
+                      gridTemplateColumns: `repeat(${settings.gridCols || 4}, minmax(0, 1fr))`,
+                      gridTemplateRows: `repeat(${settings.gridRows || 5}, minmax(0, 1fr))`
+                    }}
+                  >
                     {!isLoaded ? (
-                      <div className="col-span-5 h-full flex flex-col items-center justify-center text-slate-400">
+                      <div className="col-span-full h-full flex flex-col items-center justify-center text-slate-400">
                         <RefreshCw className="w-8 h-8 animate-spin mb-2" />
                         <span className="text-xs font-mono">Loading assets...</span>
                       </div>
                     ) : (
-                      Array.from({ length: 25 }).map((_, slotIndex) => {
+                      Array.from({ length: (settings.gridCols || 4) * (settings.gridRows || 5) }).map((_, slotIndex) => {
                         const image = sheet.images[slotIndex];
                         
                         if (!image) {
@@ -2090,7 +2256,7 @@ export const ContactSheetsTab: React.FC = () => {
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0">
                           <span className="text-[9px] font-mono text-slate-400 bg-slate-100 px-1 py-0.5 rounded">
-                            {page.sheet.images.length}/25
+                            {page.sheet.images.length}/{settings.gridRows && settings.gridCols ? settings.gridRows * settings.gridCols : 20}
                           </span>
                           {isActive && (
                             <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse" title="Current Spec" />
@@ -2138,7 +2304,7 @@ export const ContactSheetsTab: React.FC = () => {
                               <span className="truncate">Page {pIdx + 1}</span>
                               <div className="flex items-center gap-1.5 shrink-0">
                                 <span className="text-[9px] font-mono text-slate-400 bg-slate-100 px-1 py-0.5 rounded">
-                                  {p.sheet.images.length}/25
+                                  {p.sheet.images.length}/{settings.gridRows && settings.gridCols ? settings.gridRows * settings.gridCols : 20}
                                 </span>
                                 {isPageActive && (
                                   <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse" />

@@ -22,6 +22,11 @@ export interface ContactSheetSettings {
   headerColor?: string;
   headerFontFamily?: string;
   headerFontWeight?: string;
+  pageSize?: 'A4' | 'Letter' | '12x12';
+  pageOrientation?: 'portrait' | 'landscape';
+  pageMargin?: 'narrow' | 'normal' | 'wide';
+  gridRows?: number;
+  gridCols?: number;
 }
 
 export interface SheetImage {

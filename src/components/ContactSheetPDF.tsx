@@ -33,10 +33,14 @@ const getImgInfo = (src: string): Promise<HTMLImageElement> => new Promise((reso
 });
 
 export const generatePdfBlob = async (sheets: any[], settings: any): Promise<Blob> => {
+  let format: string | number[] = [864, 864];
+  if (settings.pageSize === 'A4') format = 'a4';
+  if (settings.pageSize === 'Letter') format = 'letter';
+
   const doc = new jsPDF({
-    orientation: 'portrait',
+    orientation: settings.pageOrientation || 'portrait',
     unit: 'pt',
-    format: [864, 864]
+    format: format
   });
 
   const isDark = settings.backgroundCanvas === 'black' || settings.backgroundCanvas === 'charcoal';
@@ -50,15 +54,22 @@ export const generatePdfBlob = async (sheets: any[], settings: any): Promise<Blo
   const textColorPrimaryRgb = isDark ? hexToRgb('#ffffff') : hexToRgb('#0f172a');
   const textColorSecondaryRgb = isDark ? hexToRgb('#94a3b8') : hexToRgb('#64748b');
 
-  const PAGE_WIDTH = 864;
-  const PAGE_HEIGHT = 864;
-  const PADDING_TOP = 10;
-  const PADDING_BOTTOM = 30;
-  const PADDING_X = 20;
+  const PAGE_WIDTH = doc.internal.pageSize.getWidth();
+  const PAGE_HEIGHT = doc.internal.pageSize.getHeight();
+
+  let basePadding = 36; // normal, 0.5 inch
+  if (settings.pageMargin === 'narrow') basePadding = 18; // 0.25 inch
+  else if (settings.pageMargin === 'wide') basePadding = 72; // 1.0 inch
+  // If no setting, we use 36. But wait, old default was 20. Let's keep new defaults.
+
+  const PADDING_TOP = basePadding;
+  const PADDING_BOTTOM = basePadding + (settings.showFooter ? 20 : 0);
+  const PADDING_X = basePadding;
+
   const CONTENT_WIDTH = PAGE_WIDTH - PADDING_X * 2;
-  const COLS = 5;
-  const ROWS = 5;
-  const GAP = 16.24; // ~2% of 812
+  const COLS = settings.gridCols || 4;
+  const ROWS = settings.gridRows || 5;
+  const GAP = 16.24; // ~2% of old 812
   
   const getPdfFont = (family: string) => {
     const f = (family || '').toLowerCase();
@@ -96,7 +107,7 @@ export const generatePdfBlob = async (sheets: any[], settings: any): Promise<Blo
   for (let s = 0; s < sheets.length; s++) {
     if (s > 0) doc.addPage();
     const sheet = sheets[s];
-    const cleanFolderName = sheet.folderName.replace(/\s\(Part\s\d+\)$/, "");
+    const cleanFolderName = (sheet.specName || sheet.folderName || "").replace(/\s*\(Part\s*\d+(?:\s*of\s*\d+)?\)$/i, "").trim();
 
     // Page Background
     doc.setFillColor(pageBgRgb.r, pageBgRgb.g, pageBgRgb.b);
@@ -219,7 +230,7 @@ export const generatePdfBlob = async (sheets: any[], settings: any): Promise<Blo
     // Grid
     const startY = currentY;
     
-    for (let i = 0; i < 25; i++) {
+    for (let i = 0; i < COLS * ROWS; i++) {
       const image = sheet.images[i];
       const row = Math.floor(i / COLS);
       const col = i % COLS;
