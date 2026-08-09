@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback } from 'react';
-import { processExcelFile } from './services/excelProcessor';
+import { processExcelFile, processDataMatrix, parsePastedTextToMatrix } from './services/excelProcessor';
 import { analyzeAcknowledgements, describeImage } from './services/geminiService';
 import { processContactSheet } from './services/contactSheetProcessor';
 import { validateData } from './services/dataValidator';
@@ -18,6 +18,9 @@ import { AnalysisView } from './components/AnalysisView';
 import { FilenameParser } from './components/FilenameParser';
 import { CreditsCreator } from './components/CreditsCreator';
 import { ContactSheetsTab } from './components/ContactSheetsTab';
+import { UploadedLogView } from './components/UploadedLogView';
+import { CloudSyncModal } from './components/CloudSyncModal';
+import { BmsValidation } from './components/BmsValidation';
 import type { AcknowledgementRecord, AppStatus, AIFlaggedRecord, ContactSheetStatus, ImageAnalysisResult, ExtractedImage, AIAnalysisStatus, HeaderIndices, ActiveView } from './types';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from "docx";
 import saveAs from "file-saver";
@@ -162,9 +165,218 @@ const App: React.FC = () => {
   const [activeView, setActiveView] = useState<ActiveView>('credits');
   const [headerRowIndex, setHeaderRowIndex] = useState(-1);
   const [columnIndices, setColumnIndices] = useState<HeaderIndices | null>(null);
-  const [activeTab, setActiveTab] = useState<'logReview' | 'newFeature' | 'creditsCreator' | 'contactSheets'>('contactSheets');
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  // Online File Sync State
+  const [unsavedChangesCount, setUnsavedChangesCount] = useState<number>(0);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [isCloudSyncModalOpen, setIsCloudSyncModalOpen] = useState<boolean>(false);
+  const [sourceOnlineUrl, setSourceOnlineUrl] = useState<string | null>(null);
+
+  // Handler for live edits in raw matrix
+  const handleRawDataChange = useCallback((updatedRawData: (string | number)[][]) => {
+    setRawData(updatedRawData);
+    setUnsavedChangesCount(prev => prev + 1);
+
+    try {
+      const { records: allRecords, isbn: fileIsbn, title: fileTitle } = processDataMatrix(updatedRawData);
+      setOriginalRecords(allRecords);
+      if (fileIsbn) setIsbn(fileIsbn);
+      if (fileTitle) setTitle(fileTitle);
+      setOriginalRecordCount(allRecords.length);
+
+      const validationFlags = validateData(updatedRawData, headerRowIndex, columnIndices);
+      setDataValidationFlags(validationFlags);
+
+      const coverRecords = allRecords.filter(r => isCoverPage(r.pageNumber));
+      const nonCoverRecords = allRecords.filter(r => !isCoverPage(r.pageNumber));
+
+      const { uniqueRecords: processedCoverData, duplicates: coverDups } = processGroup(coverRecords);
+      const { uniqueRecords: processedNonCoverData, duplicates: nonCoverDups } = processGroup(nonCoverRecords);
+
+      setCoverData(processedCoverData);
+      setNonCoverData(processedNonCoverData);
+      setRemovedDuplicates([...coverDups, ...nonCoverDups].sort((a,b) => a.source.localeCompare(b.source)));
+
+      const coverAckSet = new Set(processedCoverData.map(r => `${r.source}|${r.acknowledgement}`));
+      const crossDups = processedNonCoverData.filter(r => coverAckSet.has(`${r.source}|${r.acknowledgement}`));
+      setCrossCategoryDuplicates(crossDups);
+    } catch (err) {
+      console.warn("Partial edit in matrix:", err);
+    }
+  }, [headerRowIndex, columnIndices]);
+
+  // Handler to perform online file sync
+  const handlePerformOnlineSync = useCallback(async (webhookUrl?: string) => {
+    if (!rawData || rawData.length === 0) {
+      return { success: false, message: 'No log data to sync.' };
+    }
+
+    try {
+      // @ts-ignore
+      const XLSX = window.XLSX;
+      if (!XLSX) {
+        throw new Error('XLSX library is required for syncing.');
+      }
+
+      const worksheet = XLSX.utils.aoa_to_sheet(rawData);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Synced Log');
+
+      const wbout = XLSX.write(workbook, { bookType: 'xlsx', type: 'base64' });
+
+      const response = await fetch('/api/sync-online-excel', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          url: sourceOnlineUrl,
+          fileName: fileName || 'Synced_Online_Log.xlsx',
+          fileBufferBase64: wbout,
+          webhookUrl
+        })
+      });
+
+      if (!response.ok) {
+        let errorMsg = 'Failed to sync with server.';
+        try {
+          const errJson = await response.json();
+          if (errJson?.error) errorMsg = errJson.error;
+        } catch (e) {}
+        throw new Error(errorMsg);
+      }
+
+      const data = await response.json();
+      setUnsavedChangesCount(0);
+      const nowIso = new Date().toISOString();
+      setLastSyncedAt(nowIso);
+
+      return {
+        success: true,
+        message: data.message || 'Synced successfully to online session cache.',
+        webhookResult: data.webhookResult
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: err?.message || 'An error occurred during online file sync.'
+      };
+    }
+  }, [rawData, sourceOnlineUrl, fileName]);
+
+  const handleDownloadUpdatedExcelFromApp = useCallback(() => {
+    try {
+      // @ts-ignore
+      const XLSX = window.XLSX;
+      if (!XLSX || !rawData || rawData.length === 0) return;
+
+      const worksheet = XLSX.utils.aoa_to_sheet(rawData);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Original Log");
+
+      const outName = fileName ? `Updated_Log_${fileName.replace(/\.[^/.]+$/, "")}.xlsx` : "Updated_Log.xlsx";
+      XLSX.writeFile(workbook, outName);
+    } catch (e) {
+      console.error("Export failed", e);
+    }
+  }, [rawData, fileName]);
+
+  // Active tab state with localStorage persistence
+  const [activeTab, setActiveTab] = useState<'logReview' | 'newFeature' | 'creditsCreator' | 'contactSheets' | 'bmsValidation'>(() => {
+    try {
+      const saved = localStorage.getItem('app_active_tab');
+      if (saved && ['logReview', 'newFeature', 'creditsCreator', 'contactSheets', 'bmsValidation'].includes(saved)) {
+        return saved as any;
+      }
+    } catch (e) {}
+    return 'contactSheets';
+  });
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem('app_active_tab', activeTab);
+    } catch (e) {}
+  }, [activeTab]);
+
+  // Password authentication state with localStorage persistence
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('app_is_authenticated') === 'true';
+    } catch (e) {
+      return false;
+    }
+  });
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem('app_is_authenticated', String(isAuthenticated));
+    } catch (e) {}
+  }, [isAuthenticated]);
+
   const [passwordInput, setPasswordInput] = useState('');
+
+  // Restore Assessment Log Helper data from localStorage on mount
+  React.useEffect(() => {
+    try {
+      const savedLog = localStorage.getItem('assessment_log_helper_state_v1');
+      if (savedLog) {
+        const parsed = JSON.parse(savedLog);
+        if (parsed && parsed.status === 'success' && Array.isArray(parsed.originalRecords)) {
+          setStatus(parsed.status);
+          setFileName(parsed.fileName || '');
+          setIsbn(parsed.isbn || null);
+          setTitle(parsed.title || null);
+          setOriginalRecordCount(parsed.originalRecordCount || 0);
+          setOriginalRecords(parsed.originalRecords || []);
+          setCoverData(parsed.coverData || []);
+          setNonCoverData(parsed.nonCoverData || []);
+          setRemovedDuplicates(parsed.removedDuplicates || []);
+          setCrossCategoryDuplicates(parsed.crossCategoryDuplicates || []);
+          setDataValidationFlags(parsed.dataValidationFlags || []);
+          setHighlightedRowIndices(parsed.highlightedRowIndices || []);
+          setRawData(parsed.rawData || []);
+          setHeaderRowIndex(parsed.headerRowIndex ?? -1);
+          setColumnIndices(parsed.columnIndices || null);
+          if (parsed.activeView) setActiveView(parsed.activeView);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to restore log review state from storage:', e);
+    }
+  }, []);
+
+  // Save Assessment Log Helper state whenever data changes
+  React.useEffect(() => {
+    if (status === 'success' && originalRecords.length > 0) {
+      try {
+        const stateToSave = {
+          status,
+          fileName,
+          isbn,
+          title,
+          originalRecordCount,
+          originalRecords,
+          coverData,
+          nonCoverData,
+          removedDuplicates,
+          crossCategoryDuplicates,
+          dataValidationFlags,
+          highlightedRowIndices,
+          rawData,
+          headerRowIndex,
+          columnIndices,
+          activeView,
+        };
+        localStorage.setItem('assessment_log_helper_state_v1', JSON.stringify(stateToSave));
+      } catch (e) {
+        console.warn('Unable to save log review state to localStorage:', e);
+      }
+    } else if (status === 'idle') {
+      try {
+        localStorage.removeItem('assessment_log_helper_state_v1');
+      } catch (e) {}
+    }
+  }, [status, fileName, isbn, title, originalRecordCount, originalRecords, coverData, nonCoverData, removedDuplicates, crossCategoryDuplicates, dataValidationFlags, highlightedRowIndices, rawData, headerRowIndex, columnIndices, activeView]);
 
   const handlePasswordSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -226,6 +438,9 @@ const App: React.FC = () => {
     setActiveView('credits');
     setHeaderRowIndex(-1);
     setColumnIndices(null);
+    try {
+      localStorage.removeItem('assessment_log_helper_state_v1');
+    } catch (e) {}
   };
 
   const handleProcessFile = useCallback(async (file: File) => {
@@ -285,6 +500,149 @@ const App: React.FC = () => {
         setError(err.message);
       } else {
         setError('An unexpected error occurred.');
+      }
+      setStatus('error');
+    }
+  }, []);
+
+  const handleProcessPastedText = useCallback((pastedText: string) => {
+    setStatus('processing');
+    setFileName('Pasted_Log.tsv');
+    setError(null);
+    setDataValidationFlags([]);
+    setHighlightedRowIndices([]);
+    setAiFlags([]);
+    setAiAnalysisStatus('idle');
+    setIsbn(null);
+    setTitle(null);
+    setOriginalRecordCount(0);
+    setOriginalRecords([]);
+    setRawData([]);
+    setActiveView('credits');
+
+    try {
+      const rawMatrix = parsePastedTextToMatrix(pastedText);
+      const { records: allRecords, isbn: fileIsbn, title: fileTitle, rawData: allRawData, headerRowIndex, columnIndices } = processDataMatrix(rawMatrix);
+
+      setHeaderRowIndex(headerRowIndex);
+      setColumnIndices(columnIndices);
+
+      const validationFlags = validateData(allRawData, headerRowIndex, columnIndices);
+      setDataValidationFlags(validationFlags);
+      setHighlightedRowIndices(validationFlags.map(flag => flag.originalRowIndex));
+
+      setOriginalRecords(allRecords);
+      setRawData(allRawData);
+      setIsbn(fileIsbn);
+      setTitle(fileTitle);
+      setOriginalRecordCount(allRecords.length);
+
+      const coverRecords = allRecords.filter(r => isCoverPage(r.pageNumber));
+      const nonCoverRecords = allRecords.filter(r => !isCoverPage(r.pageNumber));
+
+      const { uniqueRecords: processedCoverData, duplicates: coverDups } = processGroup(coverRecords);
+      const { uniqueRecords: processedNonCoverData, duplicates: nonCoverDups } = processGroup(nonCoverRecords);
+
+      setCoverData(processedCoverData);
+      setNonCoverData(processedNonCoverData);
+      setRemovedDuplicates([...coverDups, ...nonCoverDups].sort((a,b) => a.source.localeCompare(b.source)));
+
+      const coverAckSet = new Set(processedCoverData.map(r => `${r.source}|${r.acknowledgement}`));
+      const crossDups = processedNonCoverData.filter(r => coverAckSet.has(`${r.source}|${r.acknowledgement}`));
+      setCrossCategoryDuplicates(crossDups);
+
+      setStatus('success');
+      setAiAnalysisStatus('skipped');
+    } catch (err) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('An unexpected error occurred while parsing pasted text.');
+      }
+      setStatus('error');
+    }
+  }, []);
+
+  const handleProcessOnlineUrl = useCallback(async (onlineUrl: string) => {
+    setStatus('processing');
+    const cleanUrl = onlineUrl.trim();
+    setSourceOnlineUrl(cleanUrl);
+    setFileName('Online_Log.xlsx');
+    setUnsavedChangesCount(0);
+    setLastSyncedAt(new Date().toISOString());
+    setError(null);
+    setDataValidationFlags([]);
+    setHighlightedRowIndices([]);
+    setAiFlags([]);
+    setAiAnalysisStatus('idle');
+    setIsbn(null);
+    setTitle(null);
+    setOriginalRecordCount(0);
+    setOriginalRecords([]);
+    setRawData([]);
+    setActiveView('credits');
+
+    try {
+      const response = await fetch('/api/fetch-online-excel', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ url: cleanUrl })
+      });
+
+      if (!response.ok) {
+        let errorMsg = `Failed to download online Excel file (HTTP ${response.status}).`;
+        try {
+          const errJson = await response.json();
+          if (errJson && errJson.error) {
+            errorMsg = errJson.error;
+          }
+        } catch (e) {}
+        throw new Error(errorMsg);
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      const file = new File([arrayBuffer], "Online_Log.xlsx", {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      });
+
+      const { records: allRecords, isbn: fileIsbn, title: fileTitle, rawData: allRawData, headerRowIndex, columnIndices } = await processExcelFile(file);
+
+      setHeaderRowIndex(headerRowIndex);
+      setColumnIndices(columnIndices);
+
+      const validationFlags = validateData(allRawData, headerRowIndex, columnIndices);
+      setDataValidationFlags(validationFlags);
+      setHighlightedRowIndices(validationFlags.map(flag => flag.originalRowIndex));
+
+      setOriginalRecords(allRecords);
+      setRawData(allRawData);
+      setIsbn(fileIsbn);
+      setTitle(fileTitle);
+      setOriginalRecordCount(allRecords.length);
+
+      const coverRecords = allRecords.filter(r => isCoverPage(r.pageNumber));
+      const nonCoverRecords = allRecords.filter(r => !isCoverPage(r.pageNumber));
+
+      const { uniqueRecords: processedCoverData, duplicates: coverDups } = processGroup(coverRecords);
+      const { uniqueRecords: processedNonCoverData, duplicates: nonCoverDups } = processGroup(nonCoverRecords);
+
+      setCoverData(processedCoverData);
+      setNonCoverData(processedNonCoverData);
+      setRemovedDuplicates([...coverDups, ...nonCoverDups].sort((a,b) => a.source.localeCompare(b.source)));
+
+      const coverAckSet = new Set(processedCoverData.map(r => `${r.source}|${r.acknowledgement}`));
+      const crossDups = processedNonCoverData.filter(r => coverAckSet.has(`${r.source}|${r.acknowledgement}`));
+      setCrossCategoryDuplicates(crossDups);
+
+      setStatus('success');
+      setAiAnalysisStatus('skipped');
+    } catch (err) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('An unexpected error occurred while fetching online Excel file.');
       }
       setStatus('error');
     }
@@ -870,7 +1228,11 @@ const App: React.FC = () => {
       case 'idle':
         return (
           <div className="bg-white rounded-xl shadow-lg p-2 sm:p-2">
-            <FileUpload onFileSelect={handleProcessFile} />
+            <FileUpload 
+              onFileSelect={handleProcessFile} 
+              onPasteText={handleProcessPastedText} 
+              onOnlineUrlSelect={handleProcessOnlineUrl} 
+            />
           </div>
         );
       case 'processing':
@@ -896,13 +1258,36 @@ const App: React.FC = () => {
                     dataValidationIssues={dataValidationFlags.length}
                 />
                 <div className="flex-grow min-w-0">
-                  <div className="flex justify-end items-center mb-2 px-2">
+                  <div className="flex justify-between items-center mb-2 px-2">
+                      <div className="flex items-center gap-2">
+                        <button
+                            onClick={() => setActiveView('credits')}
+                            className={`px-3 py-1 font-semibold rounded-lg text-xs transition-colors shadow-sm ${
+                                activeView === 'credits' 
+                                    ? 'bg-blue-600 text-white' 
+                                    : 'bg-white text-slate-600 border border-slate-300 hover:bg-slate-50'
+                            }`}
+                        >
+                            Credits View
+                        </button>
+                        <button
+                            onClick={() => setActiveView('uploadedLog')}
+                            className={`px-3 py-1 font-semibold rounded-lg text-xs transition-colors shadow-sm ${
+                                activeView === 'uploadedLog' 
+                                    ? 'bg-blue-600 text-white' 
+                                    : 'bg-white text-slate-600 border border-slate-300 hover:bg-slate-50'
+                            }`}
+                        >
+                            Uploaded Log (Original Order)
+                        </button>
+                      </div>
+
                       {activeView === 'credits' && (
                         <button
                             onClick={handleEditOriginal}
-                            className="flex items-center gap-2 px-3 py-1.5 bg-white text-slate-600 font-semibold rounded-lg border border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-opacity-75 transition-colors text-sm shadow-sm"
+                            className="flex items-center gap-2 px-3 py-1 bg-white text-slate-600 font-semibold rounded-lg border border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-opacity-75 transition-colors text-xs shadow-sm"
                         >
-                            <EditIcon className="w-4 h-4" />
+                            <EditIcon className="w-3.5 h-3.5" />
                             <span>Edit Original Log</span>
                         </button>
                       )}
@@ -913,6 +1298,21 @@ const App: React.FC = () => {
                       coverData={coverData}
                       nonCoverData={nonCoverData}
                       dataValidationFlags={dataValidationFlags}
+                    />
+                  )}
+
+                  {activeView === 'uploadedLog' && (
+                    <UploadedLogView 
+                      rawData={rawData}
+                      headerRowIndex={headerRowIndex}
+                      columnIndices={columnIndices}
+                      dataValidationFlags={dataValidationFlags}
+                      fileName={fileName}
+                      sourceUrl={sourceOnlineUrl}
+                      unsavedChangesCount={unsavedChangesCount}
+                      lastSyncedAt={lastSyncedAt}
+                      onRawDataChange={handleRawDataChange}
+                      onOpenSyncModal={() => setIsCloudSyncModalOpen(true)}
                     />
                   )}
                   
@@ -972,6 +1372,17 @@ const App: React.FC = () => {
                 isDownloadingSorted={isDownloadingSorted}
                 isDownloadingOriginal={isDownloadingOriginal}
                 isDownloadingAll={isDownloadingAll}
+            />
+            
+            <CloudSyncModal
+                isOpen={isCloudSyncModalOpen}
+                onClose={() => setIsCloudSyncModalOpen(false)}
+                fileName={fileName}
+                sourceUrl={sourceOnlineUrl}
+                unsavedChangesCount={unsavedChangesCount}
+                lastSyncedAt={lastSyncedAt}
+                onPerformSync={handlePerformOnlineSync}
+                onDownloadUpdatedExcel={handleDownloadUpdatedExcelFromApp}
             />
             
             {isEditModalOpen && (
@@ -1044,6 +1455,17 @@ const App: React.FC = () => {
             Credits Creator
           </button>
           <button
+            onClick={() => setActiveTab('bmsValidation')}
+            className={`${
+              activeTab === 'bmsValidation'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
+            } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium`}
+            style={{ height: '24px', paddingTop: '2px', paddingBottom: '0px' }}
+          >
+            BMS Validation
+          </button>
+          <button
             onClick={() => setActiveTab('logReview')}
             className={`${
               activeTab === 'logReview'
@@ -1056,6 +1478,8 @@ const App: React.FC = () => {
           </button>
         </nav>
       </div>
+
+      {activeTab === 'bmsValidation' && <BmsValidation />}
 
       {activeTab === 'logReview' && (
         isAuthenticated ? (

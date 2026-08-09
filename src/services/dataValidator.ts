@@ -1,272 +1,260 @@
 import type { AIFlaggedRecord, HeaderIndices } from '../types';
 
-const normalizeText = (text: string): string => {
-    // Treat hyphens, slashes as word separators and ignore case.
-    return (text || '').toLowerCase().replace(/[-/]/g, ' ');
+export const isIgnoredLastRow = (row: (string | number)[]): boolean => {
+  if (!Array.isArray(row)) return false;
+  const counts: Record<string, number> = {};
+  for (const cell of row) {
+    if (cell !== null && cell !== undefined) {
+      const val = String(cell).trim().toLowerCase();
+      if (val !== '') {
+        counts[val] = (counts[val] || 0) + 1;
+        if (counts[val] >= 10) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 };
 
 /**
- * Validates records based on a set of concrete rules.
- * @param rawData - The raw data array from the Excel sheet.
+ * Validates records based on the LR / AMH log rules.
+ * @param rawData - The raw data array from the Excel sheet or pasted table.
  * @param headerRowIndex - The index of the header row.
  * @param columnIndices - An object mapping column names to their indices.
  * @returns An array of flagged records with reasons for the flag.
  */
 export const validateData = (
-    rawData: (string | number)[][],
-    headerRowIndex: number,
-    columnIndices: HeaderIndices
+  rawData: (string | number)[][],
+  headerRowIndex: number,
+  columnIndices: HeaderIndices
 ): AIFlaggedRecord[] => {
-    // Use a temporary type for the map to hold the array of reasons
-    type TempFlaggedRecord = AIFlaggedRecord & { reasons: string[] };
-    const recordsMap = new Map<number, TempFlaggedRecord>();
-    const REASON_SEPARATOR = '|||';
+  type TempFlaggedRecord = AIFlaggedRecord & { reasons: string[] };
+  const recordsMap = new Map<number, TempFlaggedRecord>();
+  const REASON_SEPARATOR = '|||';
 
-    const getOrCreateFlaggedRecord = (rowIndex: number): TempFlaggedRecord => {
-        if (recordsMap.has(rowIndex)) {
-            return recordsMap.get(rowIndex)!;
-        }
-        const row = rawData[rowIndex];
-        const record: TempFlaggedRecord = {
-            source: String(row[columnIndices.sourceColIndex] || '').trim(),
-            acknowledgement: String(row[columnIndices.ackColIndex] || '').trim(),
-            pageNumber: String(row[columnIndices.pageColIndex] || '').trim(),
-            usageClassification: String(row[columnIndices.usageColIndex] || '').trim(),
-            licenseFee: String(row[columnIndices.feeColIndex] || '').trim(),
-            originalRowIndex: rowIndex,
-            reason: '', // Will be populated at the end
-            reasons: [],
-        };
-        recordsMap.set(rowIndex, record);
-        return record;
+  const getOrCreateFlaggedRecord = (rowIndex: number): TempFlaggedRecord => {
+    if (recordsMap.has(rowIndex)) {
+      return recordsMap.get(rowIndex)!;
+    }
+    const row = rawData[rowIndex] || [];
+    const record: TempFlaggedRecord = {
+      bragStatus: columnIndices.bragStatusColIndex !== undefined ? String(row[columnIndices.bragStatusColIndex] ?? '').trim() : '',
+      source: String(row[columnIndices.sourceColIndex] ?? '').trim(),
+      acknowledgement: String(row[columnIndices.ackColIndex] ?? '').trim(),
+      pageNumber: String(row[columnIndices.pageColIndex] ?? '').trim(),
+      usageClassification: String(row[columnIndices.usageColIndex] ?? '').trim(),
+      licenseFee: columnIndices.feeColIndex !== undefined ? String(row[columnIndices.feeColIndex] ?? '').trim() : '',
+      originalRowIndex: rowIndex,
+      description: String(row[columnIndices.descColIndex] ?? '').trim(),
+      libraryImageNo: String(row[columnIndices.imgNoColIndex] ?? '').trim(),
+      rightsType: String(row[columnIndices.rightsColIndex] ?? '').trim(),
+      photologCreation: columnIndices.photologColIndex !== undefined ? String(row[columnIndices.photologColIndex] ?? '').trim() : '',
+      statusRecleared: columnIndices.statusReclearedColIndex !== undefined ? String(row[columnIndices.statusReclearedColIndex] ?? '').trim() : '',
+      selectionsMade: columnIndices.selectionsMadeColIndex !== undefined ? String(row[columnIndices.selectionsMadeColIndex] ?? '').trim() : '',
+      notes: columnIndices.notesColIndex !== undefined ? String(row[columnIndices.notesColIndex] ?? '').trim() : '',
+      jcComments: columnIndices.jcCommentsColIndex !== undefined ? String(row[columnIndices.jcCommentsColIndex] ?? '').trim() : '',
+      aptaraComments: columnIndices.aptaraCommentsColIndex !== undefined ? String(row[columnIndices.aptaraCommentsColIndex] ?? '').trim() : '',
+      reason: '',
+      reasons: [],
     };
+    recordsMap.set(rowIndex, record);
+    return record;
+  };
 
-    // Find the last row that is considered a valid entry.
-    let lastDataRowIndex = -1;
-    for (let i = rawData.length - 1; i > headerRowIndex; i--) {
-        const row = rawData[i];
-        if (Array.isArray(row)) {
-            const sourceCell = row[columnIndices.sourceColIndex];
-            const ackCell = row[columnIndices.ackColIndex];
+  // Determine last data row index
+  let lastDataRowIndex = -1;
+  for (let i = rawData.length - 1; i > headerRowIndex; i--) {
+    const row = rawData[i];
+    if (Array.isArray(row) && row.some(cell => cell !== null && cell !== undefined && String(cell).trim() !== '')) {
+      if (isIgnoredLastRow(row)) {
+        continue; // Skip last row if at least 10 cells contain identical data
+      }
+      lastDataRowIndex = i;
+      break;
+    }
+  }
 
-            const source = (sourceCell === null || sourceCell === undefined) ? '' : String(sourceCell).trim();
-            const acknowledgement = (ackCell === null || ackCell === undefined) ? '' : String(ackCell).trim();
+  if (lastDataRowIndex === -1) {
+    return [];
+  }
 
-            const hasSource = source !== '' && source !== '.';
-            const hasAck = acknowledgement !== '' && acknowledgement !== '.';
+  // Pre-pass: Detect page number formatting style across the log
+  let pPrefixCount = 0;
+  let digitsLetterCount = 0;
 
-            if (hasSource && hasAck) {
-                lastDataRowIndex = i;
-                break;
-            }
-        }
+  for (let i = headerRowIndex + 1; i <= lastDataRowIndex; i++) {
+    const row = rawData[i];
+    if (!Array.isArray(row)) continue;
+    const pageStr = String(row[columnIndices.pageColIndex] ?? '').trim();
+    if (!pageStr) continue;
+
+    if (/^p\d+/i.test(pageStr)) {
+      pPrefixCount++;
+    } else if (/^\d+[a-z]?$/i.test(pageStr)) {
+      digitsLetterCount++;
+    }
+  }
+
+  const detectedPageStyle = pPrefixCount >= digitsLetterCount && pPrefixCount > 0 ? 'p_prefix' : 'digits';
+
+  let prevPageNumeric: number | null = null;
+  let prevPageStr = '';
+
+  const parsePageNumeric = (pageStr: string): number | null => {
+    const clean = pageStr.trim().toLowerCase();
+    if (clean === 'c' || clean.includes('cover')) return 0;
+    const match = clean.match(/\d+/);
+    if (match) {
+      return parseInt(match[0], 10);
+    }
+    return null;
+  };
+
+  // --- ROW-BY-ROW VALIDATION ---
+  for (let i = headerRowIndex + 1; i <= lastDataRowIndex; i++) {
+    const row = rawData[i];
+    if (!Array.isArray(row)) continue;
+
+    const isRowEmpty = row.every(cell => cell === null || cell === undefined || String(cell).trim() === '');
+    if (isRowEmpty) continue;
+
+    // 1. Brag Status
+    if (columnIndices.bragStatusColIndex !== undefined) {
+      const bragVal = String(row[columnIndices.bragStatusColIndex] ?? '').trim();
+      if (bragVal !== '') {
+        getOrCreateFlaggedRecord(i).reasons.push(`Brag Status must always be empty, but is "${bragVal}".`);
+      }
     }
 
-    if (lastDataRowIndex === -1) {
-        return [];
+    // 2. Usage Classification
+    const usageVal = String(row[columnIndices.usageColIndex] ?? '').trim();
+    const usageRegex = /^(New|Pick-?up)\/(License|No-? License|No-?License)$/i;
+    if (!usageVal) {
+      getOrCreateFlaggedRecord(i).reasons.push('Usage Classification is required.');
+    } else if (!usageRegex.test(usageVal)) {
+      getOrCreateFlaggedRecord(i).reasons.push(`Invalid Usage Classification "${usageVal}". Must be New/License, New/No License, Pickup/License, or Pickup/No License.`);
     }
 
-    // --- ROW-BY-ROW VALIDATION ---
-    for (let i = headerRowIndex + 1; i <= lastDataRowIndex; i++) {
-        const row = rawData[i];
-        if (!Array.isArray(row)) continue;
-
-        const source = String(row[columnIndices.sourceColIndex] || '').trim();
-        const rightsType = String(row[columnIndices.rightsColIndex] || '').trim().toUpperCase();
-        
-        // This index points to 'Notes' or 'JC Comments' depending on what was found in headers.
-        const notes = String(row[columnIndices.notesColIndex] || '').trim().toLowerCase();
-        
-        const licenseFeeValue = row[columnIndices.feeColIndex];
-        const licenseFeeStr = (licenseFeeValue === null || licenseFeeValue === undefined) ? '' : String(licenseFeeValue).trim();
-        
-        const licenseFee = parseFloat(licenseFeeStr);
-        const usageClassification = String(row[columnIndices.usageColIndex] || '').trim();
-        const normalizedUsage = normalizeText(usageClassification);
-        const sourceLower = source.toLowerCase();
-        
-        // Key definitions
-        const hasNoLicense = normalizedUsage.includes('no license');
-        const isLicensed = normalizedUsage.includes('license') && !hasNoLicense;
-
-        // --- License-Dependent Fee Validation ---
-        if (hasNoLicense) {
-            // Simplify: fee column has to be empty if 'usage classification' contains "No License"
-            if (licenseFeeStr !== '') {
-                getOrCreateFlaggedRecord(i).reasons.push(`For No License usage, Licence Fee must be blank, but is "${licenseFeeStr}".`);
-            }
-        } else if (isLicensed) {
-            // Apply rules for licensed usage
-            if (sourceLower === 'shutterstock') {
-                if (rightsType === 'RF' && licenseFee !== 10) {
-                    getOrCreateFlaggedRecord(i).reasons.push(`For Shutterstock/RF, fee must be 10, but is "${licenseFeeStr}".`);
-                } else if (rightsType === 'RM' && licenseFee !== 40) {
-                    getOrCreateFlaggedRecord(i).reasons.push(`For Shutterstock/RM, fee must be 40, but is "${licenseFeeStr}".`);
-                }
-            } else if (sourceLower === 'getty images') {
-                if (rightsType === 'RF' && licenseFee !== 17.5) {
-                    getOrCreateFlaggedRecord(i).reasons.push(`For Getty Images/RF, fee must be 17.5, but is "${licenseFeeStr}".`);
-                } else if (rightsType === 'RM' && licenseFee !== 40) {
-                    getOrCreateFlaggedRecord(i).reasons.push(`For Getty Images/RM, fee must be 40, but is "${licenseFeeStr}".`);
-                }
-            } else if (sourceLower === 'alamy') {
-                if (licenseFeeStr !== '' && ![0, 29, 45].includes(licenseFee)) {
-                    getOrCreateFlaggedRecord(i).reasons.push(`For Alamy, licensed fee must be 0, 29, or 45, but is "${licenseFeeStr}".`);
-                }
-            } else if (sourceLower === 'oup') {
-                getOrCreateFlaggedRecord(i).reasons.push(`For OUP, Usage must not contain "License", but is "${usageClassification}".`);
-            } else {
-                if (licenseFeeStr === '' || isNaN(licenseFee) || licenseFee <= 0) {
-                    getOrCreateFlaggedRecord(i).reasons.push(`Usage is licensed but Licence Fee ("${licenseFeeStr || 'empty'}") is not a positive number.`);
-                }
-            }
-        } else { 
-            // Neither "No License" nor "License" found explicitly or other state
-            if (licenseFeeStr !== '') {
-                getOrCreateFlaggedRecord(i).reasons.push(`Usage is not specified as Licensed or No License, but Licence Fee is not empty ("${licenseFeeStr}").`);
-            }
-        }
-        
-        if (sourceLower === 'oup') {
-            if (rightsType !== 'RF') {
-                getOrCreateFlaggedRecord(i).reasons.push(`For OUP, Rights Type must be "RF", but is "${rightsType}".`);
-            }
-        }
-
-        const columnsToAssertNotEmpty = [
-            { name: 'Usage Classification', index: columnIndices.usageColIndex },
-            { name: 'Description', index: columnIndices.descColIndex },
-            { name: 'Library Image no', index: columnIndices.imgNoColIndex },
-            { name: 'Source', index: columnIndices.sourceColIndex },
-            { name: 'Rights type', index: columnIndices.rightsColIndex },
-            { name: 'Acknowledgement', index: columnIndices.ackColIndex },
-            { name: 'Page number', index: columnIndices.pageColIndex },
-            { name: 'Photolog creation', index: columnIndices.photologColIndex },
-        ];
-
-        const emptyColumns: string[] = [];
-        columnsToAssertNotEmpty.forEach(col => {
-            if (col.index === undefined) return;
-            const cellValue = row[col.index];
-            if (cellValue === null || cellValue === undefined || String(cellValue).trim() === '') {
-                emptyColumns.push(col.name);
-            }
-        });
-
-        if (emptyColumns.length > 0) {
-            getOrCreateFlaggedRecord(i).reasons.push(`Required column${emptyColumns.length > 1 ? 's' : ''} empty: ${emptyColumns.join(', ')}.`);
-        }
-        
-        if (columnIndices.poNumColIndex !== undefined) {
-            if (isLicensed) {
-                const poNumber = row[columnIndices.poNumColIndex];
-                if (poNumber === null || poNumber === undefined || String(poNumber).trim() === '') {
-                    getOrCreateFlaggedRecord(i).reasons.push(`Usage is "${usageClassification}" but PO Number is empty.`);
-                }
-            }
-        }
-    }
-    
-    // --- GLOBAL VALIDATION (REUSE PAIRING) ---
-    const imageNoGroups = new Map<string, number[]>();
-    for (let i = headerRowIndex + 1; i <= lastDataRowIndex; i++) {
-        const row = rawData[i];
-        if (!Array.isArray(row)) continue;
-        const imageNo = String(row[columnIndices.imgNoColIndex] || '').trim();
-        if (imageNo) {
-            if (!imageNoGroups.has(imageNo)) {
-                imageNoGroups.set(imageNo, []);
-            }
-            imageNoGroups.get(imageNo)!.push(i);
-        }
+    // 3. Description
+    const descVal = String(row[columnIndices.descColIndex] ?? '').trim();
+    if (!descVal) {
+      getOrCreateFlaggedRecord(i).reasons.push('Description is required.');
     }
 
-    for (const [imageNo, rowIndices] of imageNoGroups.entries()) {
-        if (rowIndices.length === 1) continue;
-
-        const rowNumbers = rowIndices.map(rowIndex => rowIndex + 1).join(', ');
-        const pageNumbers = rowIndices.map(rowIndex => String(rawData[rowIndex][columnIndices.pageColIndex] || 'N/A').trim()).join(', ');
-
-        if (rowIndices.length > 2) {
-            const reason = `Image Used Too Many Times: '${imageNo}' appears ${rowIndices.length} times on rows ${rowNumbers} (pages: ${pageNumbers}). An image number should appear exactly twice for a reuse pair.`;
-            for (const rowIndex of rowIndices) {
-                getOrCreateFlaggedRecord(rowIndex).reasons.push(reason);
-            }
-            continue;
-        }
-
-        const [indexA, indexB] = rowIndices;
-        const notesA = String(rawData[indexA][columnIndices.notesColIndex] || '').trim().toLowerCase();
-        const notesB = String(rawData[indexB][columnIndices.notesColIndex] || '').trim().toLowerCase();
-        const isAReuse = notesA.includes('reuse');
-        const isBReuse = notesB.includes('reuse');
-        
-        let mainRowIndex: number | null = null;
-        let reuseRowIndex: number | null = null;
-        
-        if (isAReuse && !isBReuse) {
-            mainRowIndex = indexB;
-            reuseRowIndex = indexA;
-        } else if (!isAReuse && isBReuse) {
-            mainRowIndex = indexA;
-            reuseRowIndex = indexB;
-        } else {
-            const roleError = isAReuse && isBReuse 
-                ? `Ambiguous Pair (Conflicted): Image No "${imageNo}" (rows ${rowNumbers}) has 'reuse' in Notes for both entries. Only one is allowed.`
-                : `Ambiguous Pair (Missing Role): Image No "${imageNo}" (rows ${rowNumbers}) is missing a 'reuse' entry in Notes for one of the entries.`;
-            
-            getOrCreateFlaggedRecord(indexA).reasons.push(roleError);
-            getOrCreateFlaggedRecord(indexB).reasons.push(roleError);
-            continue;
-        }
-        
-        const mainRow = rawData[mainRowIndex];
-        const reuseRow = rawData[reuseRowIndex];
-        const pairErrors: string[] = [];
-
-        if (String(mainRow[columnIndices.descColIndex]).trim() !== String(reuseRow[columnIndices.descColIndex]).trim()) pairErrors.push("Inconsistent Description.");
-        if (String(mainRow[columnIndices.sourceColIndex]).trim() !== String(reuseRow[columnIndices.sourceColIndex]).trim()) pairErrors.push("Inconsistent Source.");
-        if (String(mainRow[columnIndices.rightsColIndex]).trim() !== String(reuseRow[columnIndices.rightsColIndex]).trim()) pairErrors.push("Inconsistent Rights Type.");
-        
-        if (pairErrors.length > 0) {
-            const combinedReason = `Inconsistent Pair Data for Image No "${imageNo}": ${pairErrors.join(' ')}`;
-            getOrCreateFlaggedRecord(mainRowIndex).reasons.push(combinedReason);
-            getOrCreateFlaggedRecord(reuseRowIndex).reasons.push(combinedReason);
-        }
-
-        const mainUsage = String(mainRow[columnIndices.usageColIndex] || '').trim();
-        const reuseUsage = String(reuseRow[columnIndices.usageColIndex] || '').trim();
-        const normalizedMainUsage = normalizeText(mainUsage);
-        const normalizedReuseUsage = normalizeText(reuseUsage);
-
-        if (((normalizedMainUsage.includes('new')) && !normalizedReuseUsage.includes('new')) || 
-            ((normalizedMainUsage.includes('pickup') || normalizedMainUsage.includes('pick up')) && !(normalizedReuseUsage.includes('pickup') || normalizedReuseUsage.includes('pick up')))) {
-            const statusError = `Inconsistent Pair Status: Mismatching 'New'/'Pickup' status between main entry and reuse entry.`;
-            getOrCreateFlaggedRecord(mainRowIndex).reasons.push(statusError);
-            getOrCreateFlaggedRecord(reuseRowIndex).reasons.push(statusError);
-        }
-
-        if (normalizedReuseUsage.includes('license') && !normalizedReuseUsage.includes('no license')) {
-            getOrCreateFlaggedRecord(reuseRowIndex).reasons.push(`Malformed Reuse Entry: The reuse entry must have a non-licensed Usage.`);
-        }
-
-        // Reuse entry fee logic follows the "No License" rule
-        const reuseFeeStr = String(reuseRow[columnIndices.feeColIndex] || '').trim();
-        if (normalizedReuseUsage.includes('no license')) {
-            if (reuseFeeStr !== '') {
-                getOrCreateFlaggedRecord(reuseRowIndex).reasons.push(`Malformed Reuse Entry: For No License usage, Licence Fee must be blank, but is "${reuseFeeStr}".`);
-            }
-        }
+    // 4. Library Image No
+    const imgNoVal = String(row[columnIndices.imgNoColIndex] ?? '').trim();
+    if (!imgNoVal) {
+      getOrCreateFlaggedRecord(i).reasons.push('Library Image No is required.');
     }
 
-    const finalFlags: AIFlaggedRecord[] = [];
-    for (const record of recordsMap.values()) {
-        if (record.reasons.length > 0) {
-            record.reason = record.reasons.join(REASON_SEPARATOR);
-            const { reasons, ...finalRecord } = record;
-            finalFlags.push(finalRecord);
+    // 5. Source
+    const sourceVal = String(row[columnIndices.sourceColIndex] ?? '').trim();
+    if (!sourceVal) {
+      getOrCreateFlaggedRecord(i).reasons.push('Source is required.');
+    } else {
+      const lowerSource = sourceVal.toLowerCase();
+      if (lowerSource.includes('shutterstock')) {
+        if (sourceVal !== 'Shutterstock') {
+          getOrCreateFlaggedRecord(i).reasons.push(`Source must be formatted exactly as "Shutterstock", but is "${sourceVal}".`);
         }
+      } else if (lowerSource.includes('getty')) {
+        if (sourceVal !== 'Getty Images') {
+          getOrCreateFlaggedRecord(i).reasons.push(`Source must be formatted exactly as "Getty Images", but is "${sourceVal}".`);
+        }
+      } else if (lowerSource.includes('alamy')) {
+        if (sourceVal !== 'Alamy Stock Photo') {
+          getOrCreateFlaggedRecord(i).reasons.push(`Source must be formatted exactly as "Alamy Stock Photo", but is "${sourceVal}".`);
+        }
+      } else if (lowerSource === 'oup' || lowerSource.includes('oxford university press')) {
+        if (sourceVal !== 'OUP') {
+          getOrCreateFlaggedRecord(i).reasons.push(`Source must be formatted exactly as "OUP", but is "${sourceVal}".`);
+        }
+      }
     }
 
-    return finalFlags;
+    // 6. Rights Type
+    const rightsVal = String(row[columnIndices.rightsColIndex] ?? '').trim();
+    const validRights = ['RF', 'RM', 'RFe', 'N/A', 'N/a', 'n/a'];
+    if (!rightsVal) {
+      getOrCreateFlaggedRecord(i).reasons.push('Rights Type is required.');
+    } else if (!validRights.includes(rightsVal) && rightsVal.toLowerCase() !== 'n/a') {
+      getOrCreateFlaggedRecord(i).reasons.push(`Rights Type must be RF, RM, RFe, or n/a, but is "${rightsVal}".`);
+    }
+
+    // 7. Acknowledgement
+    const ackVal = String(row[columnIndices.ackColIndex] ?? '').trim();
+    if (!ackVal) {
+      getOrCreateFlaggedRecord(i).reasons.push('Acknowledgement is required.');
+    } else if (!ackVal.includes('/')) {
+      getOrCreateFlaggedRecord(i).reasons.push(`Acknowledgement "${ackVal}" should contain a slash "/" separating the credit from the source.`);
+    }
+
+    // 8. Page Number
+    const pageVal = String(row[columnIndices.pageColIndex] ?? '').trim();
+    if (!pageVal) {
+      getOrCreateFlaggedRecord(i).reasons.push('Page Number is required.');
+    } else {
+      // Style consistency check
+      if (detectedPageStyle === 'p_prefix' && !/^p\d+/i.test(pageVal) && pageVal.toLowerCase() !== 'c' && !pageVal.toLowerCase().includes('cover')) {
+        getOrCreateFlaggedRecord(i).reasons.push(`Page Number "${pageVal}" does not match the established "p000" style of the log.`);
+      } else if (detectedPageStyle === 'digits' && /^p\d+/i.test(pageVal)) {
+        getOrCreateFlaggedRecord(i).reasons.push(`Page Number "${pageVal}" is inconsistent with the numerical page format of the log.`);
+      }
+
+      // Order check
+      const currentNumeric = parsePageNumeric(pageVal);
+      if (currentNumeric !== null && prevPageNumeric !== null) {
+        if (currentNumeric < prevPageNumeric) {
+          getOrCreateFlaggedRecord(i).reasons.push(`Page Number "${pageVal}" is out of order (follows page "${prevPageStr}").`);
+        }
+      }
+      if (currentNumeric !== null) {
+        prevPageNumeric = currentNumeric;
+        prevPageStr = pageVal;
+      }
+    }
+
+    // 9. Photolog Creation (£)
+    if (columnIndices.photologColIndex !== undefined) {
+      const photologVal = String(row[columnIndices.photologColIndex] ?? '').trim();
+      const numPhotolog = parseFloat(photologVal);
+      if (photologVal === '' || isNaN(numPhotolog) || numPhotolog !== 0.5) {
+        getOrCreateFlaggedRecord(i).reasons.push(`Photolog Creation (£) must be 0.5, but is "${photologVal || 'blank'}".`);
+      }
+    }
+
+    // 10. Status recleared (£)
+    if (columnIndices.statusReclearedColIndex !== undefined) {
+      const statusReclearedVal = String(row[columnIndices.statusReclearedColIndex] ?? '').trim();
+      if (statusReclearedVal !== '') {
+        const numRecleared = parseFloat(statusReclearedVal);
+        if (isNaN(numRecleared) || numRecleared !== 4) {
+          getOrCreateFlaggedRecord(i).reasons.push(`Status recleared (£) must be blank or 4, but is "${statusReclearedVal}".`);
+        }
+      }
+    }
+
+    // 11. Selections made (£)
+    if (columnIndices.selectionsMadeColIndex !== undefined) {
+      const selectionsVal = String(row[columnIndices.selectionsMadeColIndex] ?? '').trim();
+      if (selectionsVal !== '') {
+        const numSelections = parseFloat(selectionsVal);
+        if (isNaN(numSelections) || (numSelections !== 4 && numSelections !== 8)) {
+          getOrCreateFlaggedRecord(i).reasons.push(`Selections made (£) must be blank, 4, or 8, but is "${selectionsVal}".`);
+        }
+      }
+    }
+  }
+
+  const finalFlags: AIFlaggedRecord[] = [];
+  for (const record of recordsMap.values()) {
+    if (record.reasons.length > 0) {
+      record.reason = record.reasons.join(REASON_SEPARATOR);
+      const { reasons, ...finalRecord } = record;
+      finalFlags.push(finalRecord);
+    }
+  }
+
+  return finalFlags;
 };

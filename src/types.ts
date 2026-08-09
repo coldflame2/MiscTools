@@ -1,19 +1,25 @@
 
 export interface HeaderIndices {
-  sourceColIndex: number;
-  ackColIndex: number;
-  pageColIndex: number;
+  bragStatusColIndex?: number;
   usageColIndex: number;
-  feeColIndex: number;
   descColIndex: number;
   imgNoColIndex: number;
+  sourceColIndex: number;
   rightsColIndex: number;
+  ackColIndex: number;
+  pageColIndex: number;
   photologColIndex: number;
+  statusReclearedColIndex?: number;
+  selectionsMadeColIndex?: number;
+  feeColIndex: number;
   notesColIndex: number;
+  jcCommentsColIndex?: number;
+  aptaraCommentsColIndex?: number;
   poNumColIndex?: number;
 }
 
 export interface AcknowledgementRecord {
+  bragStatus?: string;
   source: string;
   acknowledgement: string;
   pageNumber: string;
@@ -24,14 +30,18 @@ export interface AcknowledgementRecord {
   libraryImageNo?: string;
   rightsType?: string;
   photologCreation?: string;
+  statusRecleared?: string;
+  selectionsMade?: string;
   notes?: string;
+  jcComments?: string;
+  aptaraComments?: string;
   poNumber?: string;
 }
 
 export type AppStatus = 'idle' | 'processing' | 'success' | 'error';
 export type AIAnalysisStatus = 'idle' | 'running' | 'completed' | 'error' | 'skipped';
 
-export type ActiveView = 'credits' | 'dataHealth' | 'analysis' | 'history' | 'export';
+export type ActiveView = 'credits' | 'uploadedLog' | 'dataHealth' | 'analysis' | 'history' | 'export';
 
 export type AIFlaggedRecord = AcknowledgementRecord & {
   reason: string;

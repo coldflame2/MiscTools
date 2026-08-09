@@ -1153,7 +1153,7 @@ export const ContactSheetsTab: React.FC = () => {
       )}
 
       {/* Primary Toolbar */}
-      <div className="flex items-center justify-between gap-2 py-1 px-4 border-b border-slate-200 bg-white/95 backdrop-blur-sm sticky top-0 z-40">
+      <div className="flex items-center justify-between gap-2 px-4 pb-1 pt-[10px] border-b border-slate-200 bg-white/95 backdrop-blur-sm sticky top-0 z-40">
         <div className="flex items-center gap-2 flex-1">
           <Layers className="w-5 h-5 text-blue-600" />
           <h2 className="text-sm font-bold tracking-tight text-slate-900">
@@ -1222,6 +1222,23 @@ export const ContactSheetsTab: React.FC = () => {
 
           {sheets.length > 0 && (
             <>
+              <button
+                onClick={() => appendInputRef.current?.click()}
+                className="flex items-center gap-1.5 px-3 py-1 bg-slate-900 hover:bg-slate-800 text-white font-medium rounded-md text-xs transition-colors h-[32px] cursor-pointer shadow-2xs"
+                title="Append more assets to current workspace"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Upload More</span>
+              </button>
+              <input
+                type="file"
+                ref={appendInputRef}
+                className="hidden"
+                accept="image/*"
+                multiple
+                onChange={(e) => e.target.files && handleAppendFiles(Array.from(e.target.files))}
+              />
+
               <div className="relative flex items-center h-[32px]" ref={exportDropdownRef}>
                 <div className="flex rounded-md shadow-sm h-full">
                   <button
@@ -1376,31 +1393,11 @@ export const ContactSheetsTab: React.FC = () => {
             </div>
 
             <div 
-              className={`flex-grow p-4 space-y-6 overflow-y-auto transition-opacity duration-200 ${effectiveIsControlsCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+              className={`flex-grow p-2.5 space-y-2.5 overflow-y-auto transition-opacity duration-200 ${effectiveIsControlsCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
               style={{ width: controlsWidth }}
             >
-              {/* PDF Preview Controls */}
-              <div className="bg-slate-50 rounded-xl p-3 border border-slate-200 flex flex-col gap-2.5 shadow-xs">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                    <FileText className="w-3.5 h-3.5 text-slate-400" />
-                    PDF Preview
-                  </span>
-                  <label className="flex items-center gap-1.5 text-xs text-slate-600 font-semibold cursor-pointer select-none bg-white px-2 py-0.5 rounded border border-slate-200 shadow-2xs">
-                    <input
-                      type="checkbox"
-                      checked={autoUpdate}
-                      onChange={(e) => {
-                        setAutoUpdate(e.target.checked);
-                        if (e.target.checked && previewMode !== 'pdf') {
-                          setPreviewMode('pdf');
-                        }
-                      }}
-                      className="w-3.5 h-3.5 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
-                    />
-                    <span>Live Update</span>
-                  </label>
-                </div>
+              {/* PDF Preview Controls (Single Line) */}
+              <div className="bg-slate-50 rounded-lg p-1.5 border border-slate-200 flex items-center gap-1.5 shadow-2xs">
                 <button 
                   onClick={async () => {
                     if (previewMode !== 'pdf') {
@@ -1409,91 +1406,70 @@ export const ContactSheetsTab: React.FC = () => {
                     await generatePreview();
                   }}
                   disabled={isPreviewGenerating || sheets.length === 0}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-50 flex items-center justify-center gap-1.5 shadow-xs h-[32px] cursor-pointer"
+                  className="flex-grow bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded text-xs font-semibold transition-all disabled:opacity-50 flex items-center justify-center gap-1.5 h-[28px] cursor-pointer shadow-2xs min-w-0"
                 >
                   {isPreviewGenerating ? (
-                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin shrink-0" />
+                    <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin shrink-0" />
                   ) : (
-                    <RefreshCw className="w-3.5 h-3.5" />
+                    <RefreshCw className="w-3 h-3 shrink-0" />
                   )}
-                  <span>Update PDF Preview</span>
+                  <span className="truncate">Update Preview</span>
                 </button>
+                <label className="flex items-center gap-1 text-[11px] text-slate-600 font-semibold cursor-pointer select-none bg-white px-2 h-[28px] rounded border border-slate-200 shrink-0 shadow-2xs">
+                  <input
+                    type="checkbox"
+                    checked={autoUpdate}
+                    onChange={(e) => {
+                      setAutoUpdate(e.target.checked);
+                      if (e.target.checked && previewMode !== 'pdf') {
+                        setPreviewMode('pdf');
+                      }
+                    }}
+                    className="w-3.5 h-3.5 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
+                  />
+                  <span>Live</span>
+                </label>
               </div>
 
-              {/* Header Titles Customization */}
-              <div className="space-y-3 pt-3 border-t border-slate-100">
-                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                  <Type className="w-3.5 h-3.5 text-slate-400" />
+              {/* Header Content */}
+              <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1 mb-0.5">
+                  <Type className="w-3 h-3 text-slate-400" />
                   Header Content
-                </label>
+                </div>
 
                 {/* Right Title */}
-                <div>
-                  <label className="text-xs text-slate-600 mb-1 block">Header Right Title</label>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-slate-600 shrink-0 font-medium w-24">Header Title</label>
                   <input
                     type="text"
                     placeholder="Photo Research"
                     value={settings.minimalRightTitle || ''}
                     onChange={(e) => setSettings(prev => ({ ...prev, minimalRightTitle: e.target.value }))}
-                    className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white text-slate-800"
+                    className="flex-grow min-w-0 px-2 py-1 text-xs border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white text-slate-800"
                   />
                 </div>
 
-                {/* Subtitle (Show for styles other than minimal) */}
-                {settings.headerStyle !== 'minimal' && (
-                  <>
-                    <div>
-                      <label className="text-xs text-slate-600 mb-1 block">Subtitle Description</label>
-                      <input
-                        type="text"
-                        placeholder="Field Analysis & Asset Portfolio"
-                        value={settings.customSubtitle || ''}
-                        onChange={(e) => setSettings(prev => ({ ...prev, customSubtitle: e.target.value }))}
-                        className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white text-slate-800"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="text-xs text-slate-600 mb-1 block">Creation Date</label>
-                      <input
-                        type="text"
-                        value={settings.customDate || ''}
-                        onChange={(e) => setSettings(prev => ({ ...prev, customDate: e.target.value }))}
-                        className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white text-slate-800"
-                      />
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Header Title Font Customization */}
-              <div className="space-y-3 pt-3 border-t border-slate-100">
-                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                  <Sliders className="w-3.5 h-3.5 text-slate-400" />
-                  Header Title Font Styling
-                </label>
-
-                <div>
-                  <label className="text-xs text-slate-600 mb-1 flex justify-between">
-                    <span>Font Size</span>
-                    <span>{settings.headerFontSize || 14}px</span>
-                  </label>
+                {/* Header Font Controls */}
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-slate-600 shrink-0 font-medium w-24">Font Size</label>
                   <input
                     type="range"
                     min="8"
                     max="36"
                     value={settings.headerFontSize || 14}
                     onChange={(e) => setSettings(prev => ({ ...prev, headerFontSize: parseInt(e.target.value) }))}
-                    className="w-full accent-blue-500"
+                    className="flex-grow accent-blue-500 h-1.5"
                   />
+                  <span className="text-xs font-mono text-slate-500 w-8 text-right shrink-0">{settings.headerFontSize || 14}px</span>
                 </div>
 
-                <div>
-                  <label className="text-xs text-slate-600 mb-1 block">Font Family</label>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-slate-600 shrink-0 font-medium w-24">Font Family</label>
                   <select
                     value={settings.headerFontFamily || 'Calibri, sans-serif'}
                     onChange={(e) => setSettings(prev => ({ ...prev, headerFontFamily: e.target.value }))}
-                    className="w-full text-xs px-3 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                    className="flex-grow min-w-0 text-xs px-2 py-1 border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white text-slate-800"
                   >
                     <option value="Calibri, sans-serif">Calibri</option>
                     <option value="Inter, sans-serif">Inter</option>
@@ -1503,12 +1479,12 @@ export const ContactSheetsTab: React.FC = () => {
                   </select>
                 </div>
 
-                <div>
-                  <label className="text-xs text-slate-600 mb-1 block">Font Weight</label>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-slate-600 shrink-0 font-medium w-24">Font Weight</label>
                   <select
                     value={settings.headerFontWeight || 'bold'}
                     onChange={(e) => setSettings(prev => ({ ...prev, headerFontWeight: e.target.value }))}
-                    className="w-full text-xs px-3 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                    className="flex-grow min-w-0 text-xs px-2 py-1 border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white text-slate-800"
                   >
                     <option value="normal">Normal</option>
                     <option value="bold">Bold</option>
@@ -1520,25 +1496,22 @@ export const ContactSheetsTab: React.FC = () => {
                   </select>
                 </div>
 
-                <div>
-                  <label className="text-xs text-slate-600 mb-1 flex justify-between items-center">
-                    <span>Font Color</span>
-                    <span className="font-mono text-[10px] text-slate-400 uppercase">{settings.headerColor || '#000000'}</span>
-                  </label>
-                  <div className="flex gap-2 items-center">
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-slate-600 shrink-0 font-medium w-24">Font Color</label>
+                  <div className="flex-grow min-w-0 flex items-center gap-1.5">
                     <input
                       type="color"
                       value={settings.headerColor || '#000000'}
                       onChange={(e) => setSettings(prev => ({ ...prev, headerColor: e.target.value }))}
-                      className="w-8 h-8 p-0 border-0 rounded cursor-pointer"
+                      className="w-6 h-6 p-0 border-0 rounded cursor-pointer shrink-0"
                     />
-                    <div className="flex gap-1 overflow-x-auto pb-1 flex-grow">
+                    <div className="flex gap-1 overflow-x-auto pb-0.5 flex-grow">
                       {['#000000', '#1e293b', '#64748b', '#ffffff', '#ef4444', '#3b82f6', '#10b981', '#f59e0b'].map(color => (
                         <button
                           key={color}
                           type="button"
                           onClick={() => setSettings(prev => ({ ...prev, headerColor: color }))}
-                          className={`shrink-0 w-6 h-6 rounded border transition-all ${
+                          className={`shrink-0 w-4 h-4 rounded border transition-all ${
                             (settings.headerColor || '#000000') === color ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200'
                           }`}
                           style={{ backgroundColor: color }}
@@ -1549,141 +1522,45 @@ export const ContactSheetsTab: React.FC = () => {
                   </div>
                 </div>
               </div>
-              {/* Labels configuration */}
-              <div className="space-y-3 pt-3 border-t border-slate-100">
-                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 mb-2">
-                  Asset Labels
-                </label>
-                
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-600">Show filename labels</span>
-                  <input
-                    type="checkbox"
-                    checked={settings.showLabels}
-                    onChange={(e) => setSettings(prev => ({ ...prev, showLabels: e.target.checked }))}
-                    className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
-                  />
-                </div>
-
-                {settings.showLabels && (
-                  <div className="space-y-3 animate-fade-in">
-                    <div>
-                      <label className="text-xs text-slate-600 mb-1 flex justify-between">
-                        <span>Font Size</span>
-                        <span>{settings.labelFontSize}px</span>
-                      </label>
-                      <input
-                        type="range"
-                        min="6"
-                        max="24"
-                        value={settings.labelFontSize}
-                        onChange={(e) => setSettings(prev => ({ ...prev, labelFontSize: parseInt(e.target.value) }))}
-                        className="w-full accent-blue-500"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="text-xs text-slate-600 mb-1 block">Font Family</label>
-                      <select
-                        value={settings.labelFontFamily}
-                        onChange={(e) => setSettings(prev => ({ ...prev, labelFontFamily: e.target.value }))}
-                        className="w-full text-xs px-3 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
-                      >
-                        <option value="Calibri, sans-serif">Calibri</option>
-                        <option value="Inter, sans-serif">Inter</option>
-                        <option value="'JetBrains Mono', monospace">JetBrains Mono</option>
-                        <option value="Arial, sans-serif">Arial</option>
-                        <option value="'Times New Roman', serif">Times New Roman</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="text-xs text-slate-600 mb-1 block">Font Weight</label>
-                      <select
-                        value={settings.labelFontWeight}
-                        onChange={(e) => setSettings(prev => ({ ...prev, labelFontWeight: e.target.value }))}
-                        className="w-full text-xs px-3 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
-                      >
-                        <option value="normal">Normal</option>
-                        <option value="bold">Bold</option>
-                        <option value="100">Thin (100)</option>
-                        <option value="300">Light (300)</option>
-                        <option value="500">Medium (500)</option>
-                        <option value="700">Bold (700)</option>
-                        <option value="900">Black (900)</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="text-xs text-slate-600 mb-1 flex justify-between items-center">
-                        <span>Label Color</span>
-                        <span className="font-mono text-[10px] text-slate-400 uppercase">{settings.labelColor}</span>
-                      </label>
-                      <div className="flex gap-2 items-center">
-                        <input
-                          type="color"
-                          value={settings.labelColor}
-                          onChange={(e) => setSettings(prev => ({ ...prev, labelColor: e.target.value }))}
-                          className="w-8 h-8 p-0 border-0 rounded cursor-pointer"
-                        />
-                        <div className="flex gap-1 overflow-x-auto pb-1 flex-grow">
-                          {['#000000', '#334155', '#64748b', '#ffffff', '#ef4444', '#3b82f6'].map(color => (
-                            <button
-                              key={color}
-                              onClick={() => setSettings(prev => ({ ...prev, labelColor: color }))}
-                              className={`shrink-0 w-6 h-6 rounded border transition-all ${
-                                settings.labelColor === color ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200'
-                              }`}
-                              style={{ backgroundColor: color }}
-                              title={color}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
 
               {/* Page Layout & Grid */}
-              <div className="space-y-3 pt-3 border-t border-slate-100">
-                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 mb-2">
-                  <BookOpen className="w-3.5 h-3.5 text-slate-400" />
+              <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1 mb-0.5">
+                  <BookOpen className="w-3 h-3 text-slate-400" />
                   Page Layout & Grid
-                </label>
+                </div>
                 
-                <div>
-                  <label className="text-xs text-slate-600 mb-1 block">Page Size</label>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-slate-600 shrink-0 font-medium w-24">Page Size</label>
                   <select
-                    value={settings.pageSize || '12x12'}
+                    value={settings.pageSize || 'A4'}
                     onChange={(e) => setSettings(prev => ({ ...prev, pageSize: e.target.value as any }))}
-                    className="w-full text-xs px-3 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                    className="flex-grow min-w-0 text-xs px-2 py-1 border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white text-slate-800"
                   >
-                    <option value="12x12">12x12 (Square)</option>
                     <option value="A4">A4</option>
                     <option value="Letter">Letter</option>
+                    <option value="12x12">12x12 (Square)</option>
                   </select>
                 </div>
                 
-                <div>
-                  <label className="text-xs text-slate-600 mb-1 block">Orientation</label>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-slate-600 shrink-0 font-medium w-24">Orientation</label>
                   <select
                     value={settings.pageOrientation || 'portrait'}
                     onChange={(e) => setSettings(prev => ({ ...prev, pageOrientation: e.target.value as any }))}
-                    className="w-full text-xs px-3 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                    className="flex-grow min-w-0 text-xs px-2 py-1 border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white text-slate-800"
                   >
                     <option value="portrait">Portrait</option>
                     <option value="landscape">Landscape</option>
                   </select>
                 </div>
 
-                <div>
-                  <label className="text-xs text-slate-600 mb-1 block">Page Margins</label>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-slate-600 shrink-0 font-medium w-24">Margins</label>
                   <select
-                    value={settings.pageMargin || 'normal'}
+                    value={settings.pageMargin || 'narrow'}
                     onChange={(e) => setSettings(prev => ({ ...prev, pageMargin: e.target.value as any }))}
-                    className="w-full text-xs px-3 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                    className="flex-grow min-w-0 text-xs px-2 py-1 border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white text-slate-800"
                   >
                     <option value="narrow">Narrow (1/4 in)</option>
                     <option value="normal">Normal (1/2 in)</option>
@@ -1691,194 +1568,207 @@ export const ContactSheetsTab: React.FC = () => {
                   </select>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-xs text-slate-600 mb-1 block">Grid Rows</label>
-                    <input
-                      type="number"
-                      min="1"
-                      max="10"
-                      value={settings.gridRows || 5}
-                      onChange={(e) => setSettings(prev => ({ ...prev, gridRows: parseInt(e.target.value) || 5 }))}
-                      className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-slate-600 mb-1 block">Grid Cols</label>
-                    <input
-                      type="number"
-                      min="1"
-                      max="10"
-                      value={settings.gridCols || 4}
-                      onChange={(e) => setSettings(prev => ({ ...prev, gridCols: parseInt(e.target.value) || 4 }))}
-                      className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
-                    />
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-slate-600 shrink-0 font-medium w-24">Grid Layout</label>
+                  <div className="flex-grow flex items-center gap-2">
+                    <div className="flex items-center gap-1 flex-1 min-w-0">
+                      <span className="text-xs text-slate-500">R:</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max="10"
+                        value={settings.gridRows || 5}
+                        onChange={(e) => setSettings(prev => ({ ...prev, gridRows: parseInt(e.target.value) || 5 }))}
+                        className="w-full px-1.5 py-1 text-xs border border-slate-200 rounded-md text-center focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                      />
+                    </div>
+                    <div className="flex items-center gap-1 flex-1 min-w-0">
+                      <span className="text-xs text-slate-500">C:</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max="10"
+                        value={settings.gridCols || 4}
+                        onChange={(e) => setSettings(prev => ({ ...prev, gridCols: parseInt(e.target.value) || 4 }))}
+                        className="w-full px-1.5 py-1 text-xs border border-slate-200 rounded-md text-center focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
+
+              {/* Labels configuration */}
 
               {/* Fit modes */}
-              <div className="pt-3 border-t border-slate-100">
-                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 mb-2">
-                  <Grid className="w-3.5 h-3.5 text-slate-400" />
+              <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1 mb-0.5">
+                  <Grid className="w-3 h-3 text-slate-400" />
                   Image Aspect Fit
-                </label>
-                <div className="grid grid-cols-2 gap-2">
+                </div>
+                <div className="grid grid-cols-2 gap-1 p-0.5 bg-slate-100 rounded-md border border-slate-200">
                   <button
+                    type="button"
                     onClick={() => setSettings(prev => ({ ...prev, imageFit: 'contain' }))}
-                    className={`px-3 py-2 text-xs font-semibold border rounded-lg transition-all ${
+                    className={`py-1 text-[11px] font-semibold rounded transition-all text-center ${
                       settings.imageFit === 'contain'
-                        ? 'bg-blue-50 border-blue-500 text-blue-700 shadow-sm'
-                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                        ? 'bg-white text-blue-600 shadow-2xs border border-slate-200/80'
+                        : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    Contain (Full Image)
+                    Contain
                   </button>
                   <button
+                    type="button"
                     onClick={() => setSettings(prev => ({ ...prev, imageFit: 'cover' }))}
-                    className={`px-3 py-2 text-xs font-semibold border rounded-lg transition-all ${
+                    className={`py-1 text-[11px] font-semibold rounded transition-all text-center ${
                       settings.imageFit === 'cover'
-                        ? 'bg-blue-50 border-blue-500 text-blue-700 shadow-sm'
-                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                        ? 'bg-white text-blue-600 shadow-2xs border border-slate-200/80'
+                        : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    Cover (Crop Square)
+                    Cover (Crop)
                   </button>
                 </div>
               </div>
 
-              {/* Branding styles presets */}
-              <div>
-                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 mb-2">
-                  <Type className="w-3.5 h-3.5 text-slate-400" />
-                  Header Style Presets
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  {(['minimal', 'classic', 'academic', 'industrial'] as const).map(style => (
-                    <button
-                      key={style}
-                      onClick={() => setSettings(prev => ({ ...prev, headerStyle: style }))}
-                      className={`px-3 py-1.5 text-xs font-semibold border rounded-lg capitalize transition-all ${
-                        settings.headerStyle === style
-                          ? 'bg-blue-50 border-blue-500 text-blue-700 shadow-sm'
-                          : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                      }`}
-                    >
-                      {style}
-                    </button>
-                  ))}
+              {/* Grid Background & Cell Background */}
+              <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Canvas & Cell Background</div>
+                
+                {/* Canvas Background */}
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-slate-600 shrink-0 font-medium w-24">Canvas</label>
+                  <div className="flex-grow min-w-0 flex items-center gap-1.5">
+                    <input
+                      type="color"
+                      value={settings.backgroundCanvas?.startsWith('#') ? settings.backgroundCanvas : (settings.backgroundCanvas === 'black' ? '#000000' : settings.backgroundCanvas === 'charcoal' ? '#1e293b' : '#ffffff')}
+                      onChange={(e) => setSettings(prev => ({ ...prev, backgroundCanvas: e.target.value }))}
+                      className="w-6 h-6 p-0 border-0 rounded cursor-pointer shrink-0"
+                      title="Custom Canvas Color"
+                    />
+                    <div className="flex gap-1 overflow-x-auto pb-0.5 flex-grow items-center">
+                      <button
+                        type="button"
+                        onClick={() => setSettings(prev => ({ ...prev, backgroundCanvas: 'transparent' }))}
+                        className={`shrink-0 w-4 h-4 rounded border border-dashed border-slate-400 bg-transparent transition-all ${
+                          settings.backgroundCanvas === 'transparent' ? 'border-blue-500 ring-1 ring-blue-500' : ''
+                        }`}
+                        title="Transparent"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setSettings(prev => ({ ...prev, backgroundCanvas: 'white' }))}
+                        className={`shrink-0 w-4 h-4 rounded border transition-all bg-white ${
+                          settings.backgroundCanvas === 'white' || settings.backgroundCanvas === '#ffffff' ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-300'
+                        }`}
+                        title="White"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setSettings(prev => ({ ...prev, backgroundCanvas: 'black' }))}
+                        className={`shrink-0 w-4 h-4 rounded border transition-all bg-black ${
+                          settings.backgroundCanvas === 'black' || settings.backgroundCanvas === '#000000' ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-800'
+                        }`}
+                        title="Black"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setSettings(prev => ({ ...prev, backgroundCanvas: 'charcoal' }))}
+                        className={`shrink-0 w-4 h-4 rounded border transition-all bg-slate-800 ${
+                          settings.backgroundCanvas === 'charcoal' || settings.backgroundCanvas === '#1e293b' ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-700'
+                        }`}
+                        title="Charcoal"
+                      />
+                    </div>
+                  </div>
                 </div>
-              </div>
 
-
-
-              {/* Grid Background presets */}
-              <div className="pt-3 border-t border-slate-100">
-                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 mb-2">
-                  <Grid className="w-3.5 h-3.5 text-slate-400" />
-                  Background Theme
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  {(['white', 'black', 'charcoal', 'transparent'] as const).map(color => (
-                    <button
-                      key={color}
-                      onClick={() => setSettings(prev => ({ ...prev, backgroundCanvas: color }))}
-                      className={`px-3 py-1.5 text-xs font-semibold border rounded-lg capitalize flex items-center gap-2 transition-all ${
-                        settings.backgroundCanvas === color
-                          ? 'bg-blue-50 border-blue-500 text-blue-700 shadow-sm'
-                          : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                      }`}
-                    >
-                      <span className={`w-3 h-3 rounded border border-slate-300 ${
-                        color === 'white' ? 'bg-white' : color === 'black' ? 'bg-black' : color === 'charcoal' ? 'bg-slate-800' : 'bg-transparent border-dashed'
-                      }`} />
-                      {color}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Cell Background presets */}
-              <div className="pt-3 border-t border-slate-100">
-                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 mb-2">
-                  <Grid className="w-3.5 h-3.5 text-slate-400" />
-                  Cell Background Color
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  {(Object.keys(CELL_BACKGROUND_COLORS) as Array<keyof typeof CELL_BACKGROUND_COLORS>).map(color => (
-                    <button
-                      key={color}
-                      onClick={() => setSettings(prev => ({ ...prev, cellBackgroundColor: color }))}
-                      className={`px-3 py-1.5 text-xs font-semibold border rounded-lg capitalize flex items-center gap-2 transition-all ${
-                        settings.cellBackgroundColor === color
-                          ? 'bg-blue-50 border-blue-500 text-blue-700 shadow-sm'
-                          : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                      }`}
-                    >
-                      <span className={`w-3 h-3 rounded border border-slate-300 ${CELL_BACKGROUND_COLORS[color]}`} />
-                      {color.replace('-', ' ')}
-                    </button>
-                  ))}
+                {/* Cell Background */}
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-slate-600 shrink-0 font-medium w-24">Cell Bg</label>
+                  <div className="flex-grow min-w-0 flex items-center gap-1.5">
+                    <input
+                      type="color"
+                      value={settings.cellBackgroundColor?.startsWith('#') ? settings.cellBackgroundColor : (settings.cellBackgroundColor === 'black' ? '#000000' : settings.cellBackgroundColor === 'slate-800' ? '#1e293b' : '#ffffff')}
+                      onChange={(e) => setSettings(prev => ({ ...prev, cellBackgroundColor: e.target.value }))}
+                      className="w-6 h-6 p-0 border-0 rounded cursor-pointer shrink-0"
+                      title="Custom Cell Color"
+                    />
+                    <div className="flex gap-1 overflow-x-auto pb-0.5 flex-grow items-center">
+                      <button
+                        type="button"
+                        onClick={() => setSettings(prev => ({ ...prev, cellBackgroundColor: 'transparent' }))}
+                        className={`shrink-0 w-4 h-4 rounded border border-dashed border-slate-400 bg-transparent transition-all ${
+                          settings.cellBackgroundColor === 'transparent' ? 'border-blue-500 ring-1 ring-blue-500' : ''
+                        }`}
+                        title="Transparent"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setSettings(prev => ({ ...prev, cellBackgroundColor: 'white' }))}
+                        className={`shrink-0 w-4 h-4 rounded border transition-all bg-white ${
+                          settings.cellBackgroundColor === 'white' || settings.cellBackgroundColor === '#ffffff' ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-300'
+                        }`}
+                        title="White"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setSettings(prev => ({ ...prev, cellBackgroundColor: 'slate-50' }))}
+                        className={`shrink-0 w-4 h-4 rounded border transition-all bg-slate-100 ${
+                          settings.cellBackgroundColor === 'slate-50' || settings.cellBackgroundColor === '#f8fafc' ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200'
+                        }`}
+                        title="Light Gray"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setSettings(prev => ({ ...prev, cellBackgroundColor: 'black' }))}
+                        className={`shrink-0 w-4 h-4 rounded border transition-all bg-black ${
+                          settings.cellBackgroundColor === 'black' || settings.cellBackgroundColor === '#000000' ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-800'
+                        }`}
+                        title="Black"
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
 
               {/* Footer controls */}
-              <div className="space-y-3 pt-3 border-t border-slate-100">
-                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center justify-between gap-1.5 mb-2">
-                  <span>Footer Config</span>
+              <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Footer Config</span>
                   <input
                     type="checkbox"
                     checked={settings.showFooter}
                     onChange={(e) => setSettings(prev => ({ ...prev, showFooter: e.target.checked }))}
-                    className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
+                    className="w-3.5 h-3.5 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
                   />
-                </label>
+                </div>
 
                 {settings.showFooter && (
-                  <>
+                  <div className="space-y-1.5 pl-1.5 border-l-2 border-slate-200 mt-1">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs text-slate-600">Include page numbers</span>
+                      <span className="text-xs text-slate-600 font-medium">Page Numbers</span>
                       <input
                         type="checkbox"
                         checked={settings.footerShowPageNumber}
                         onChange={(e) => setSettings(prev => ({ ...prev, footerShowPageNumber: e.target.checked }))}
-                        className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
+                        className="w-3.5 h-3.5 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
                       />
                     </div>
 
-                    <div>
-                      <label className="text-xs text-slate-600 mb-1 block">Custom Footer Notes</label>
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs text-slate-600 shrink-0 font-medium w-24">Footer Notes</label>
                       <input
                         type="text"
                         value={settings.footerCustomText}
                         onChange={(e) => setSettings(prev => ({ ...prev, footerCustomText: e.target.value }))}
-                        className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className="flex-grow min-w-0 text-xs px-2 py-1 border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white text-slate-800"
                       />
                     </div>
-                  </>
+                  </div>
                 )}
               </div>
 
-            </div>
-
-            {/* Sidebar bottom: "Upload More" button */}
-            <div className="p-4 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
-              <span className="text-xs text-slate-500">Append assets</span>
-              <button
-                onClick={() => appendInputRef.current?.click()}
-                className="flex items-center gap-1 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-lg text-xs transition-colors shadow-sm"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Upload More</span>
-              </button>
-              <input
-                type="file"
-                ref={appendInputRef}
-                className="hidden"
-                accept="image/*"
-                multiple
-                onChange={(e) => e.target.files && handleAppendFiles(Array.from(e.target.files))}
-              />
             </div>
           </motion.aside>
 

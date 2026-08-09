@@ -1,30 +1,30 @@
 import type { AcknowledgementRecord, ProcessedExcelData, HeaderIndices } from '../types';
+import { isIgnoredLastRow } from './dataValidator';
 
 const findMetadata = (data: (string | number)[][]): { isbn: string | null, title: string | null } => {
-    let isbn: string | null = null;
-    let title: string | null = null;
-    const searchDepth = 5; // Search the first 5 rows for metadata
+  let isbn: string | null = null;
+  let title: string | null = null;
+  const searchDepth = 10; // Search the first 10 rows for metadata
 
-    for (let r = 0; r < Math.min(data.length, searchDepth); r++) {
-        const row = data[r];
-        if (!Array.isArray(row)) continue;
+  for (let r = 0; r < Math.min(data.length, searchDepth); r++) {
+    const row = data[r];
+    if (!Array.isArray(row)) continue;
 
-        for (let c = 0; c < row.length - 1; c++) {
-            const cellValue = String(row[c]).toLowerCase().trim();
-            const nextCellValue = String(row[c + 1]).trim();
+    for (let c = 0; c < row.length - 1; c++) {
+      const cellValue = String(row[c]).toLowerCase().trim();
+      const nextCellValue = String(row[c + 1]).trim();
 
-            if (cellValue.includes('isbn') && !isbn) {
-                isbn = nextCellValue;
-            }
-            if (cellValue.includes('title') && !title) {
-                title = nextCellValue;
-            }
-        }
-        if (isbn && title) break; // Stop searching once both are found
+      if (cellValue.includes('isbn') && !isbn) {
+        isbn = nextCellValue;
+      }
+      if (cellValue.includes('title') && !title) {
+        title = nextCellValue;
+      }
     }
-    return { isbn, title };
+    if (isbn && title) break;
+  }
+  return { isbn, title };
 };
-
 
 const findHeaders = (data: (string | number)[][]): {
   headerRowIndex: number;
@@ -33,20 +33,25 @@ const findHeaders = (data: (string | number)[][]): {
   let headerRowIndex = -1;
   let columnIndices: Partial<HeaderIndices> = {};
 
-  // Map header names to keys in HeaderIndices. 
-  // We prioritize 'jc comments' over 'notes' as per user request.
   const headerMap: { [key: string]: keyof HeaderIndices } = {
-    'source': 'sourceColIndex',
-    'acknowledgement': 'ackColIndex',
-    'page number': 'pageColIndex',
+    'brag status': 'bragStatusColIndex',
+    'bragg status': 'bragStatusColIndex',
     'usage classification': 'usageColIndex',
-    'licence fee': 'feeColIndex',
     'description': 'descColIndex',
     'library image no': 'imgNoColIndex',
+    'library image number': 'imgNoColIndex',
+    'source': 'sourceColIndex',
     'rights type': 'rightsColIndex',
+    'acknowledgement': 'ackColIndex',
+    'page number': 'pageColIndex',
     'photolog creation': 'photologColIndex',
-    'jc comments': 'notesColIndex', // Primary
-    'notes': 'notesColIndex',        // Secondary fallback
+    'status recleared': 'statusReclearedColIndex',
+    'selections made': 'selectionsMadeColIndex',
+    'licence fee': 'feeColIndex',
+    'license fee': 'feeColIndex',
+    'notes': 'notesColIndex',
+    'jc comments': 'jcCommentsColIndex',
+    'aptara comments': 'aptaraCommentsColIndex',
     'po number': 'poNumColIndex'
   };
 
@@ -55,12 +60,9 @@ const findHeaders = (data: (string | number)[][]): {
     'ackColIndex',
     'pageColIndex',
     'usageColIndex',
-    'feeColIndex',
     'descColIndex',
     'imgNoColIndex',
-    'rightsColIndex',
-    'photologColIndex',
-    'notesColIndex'
+    'rightsColIndex'
   ];
 
   for (let i = 0; i < data.length; i++) {
@@ -72,72 +74,30 @@ const findHeaders = (data: (string | number)[][]): {
     );
     
     const tempIndices: Partial<HeaderIndices> = {};
-    
-    // Track indices for jc comments and notes to resolve conflicts
-    let jcCommentsIndex = -1;
-    let notesIndex = -1;
 
-    // Check all headers in the map
-    // We iterate in order, but since multiple names can map to the same key,
-    // we should be careful about which index we pick.
     for (const headerName in headerMap) {
-        let index = lowerCaseRow.indexOf(headerName);
-        
-        // Relaxed substring matching if exact match fails
-        if (index === -1) {
-            index = lowerCaseRow.findIndex(cell => {
-                if (!cell) return false;
-                if (headerName === 'source') {
-                    return cell === 'source' || cell.includes('source');
-                }
-                if (headerName === 'notes') {
-                    return cell === 'notes' || cell.includes('notes') || cell.includes('comment');
-                }
-                return cell.includes(headerName);
-            });
-        }
+      let index = lowerCaseRow.indexOf(headerName);
+      if (index === -1) {
+        index = lowerCaseRow.findIndex(cell => {
+          if (!cell) return false;
+          if (headerName === 'source') {
+            return cell === 'source' || cell.includes('source');
+          }
+          if (headerName === 'notes') {
+            return cell === 'notes' || cell.includes('notes');
+          }
+          return cell.includes(headerName);
+        });
+      }
 
-        if (index !== -1) {
-            const key = headerMap[headerName];
-            
-            if (headerName === 'jc comments') {
-                jcCommentsIndex = index;
-            } else if (headerName === 'notes') {
-                notesIndex = index;
-            }
-
-            // By default, map to key. We will resolve conflict for notesColIndex below.
-            if (tempIndices[key] === undefined || headerName === 'jc comments') {
-                tempIndices[key] = index;
-            }
+      if (index !== -1) {
+        const key = headerMap[headerName];
+        if (tempIndices[key] === undefined) {
+          tempIndices[key] = index;
         }
+      }
     }
 
-    // Dynamic conflict resolution: if BOTH jc comments and notes columns are found,
-    // choose the one that actually contains more non-empty data cells in the sheet!
-    if (jcCommentsIndex !== -1 && notesIndex !== -1) {
-        let jcCount = 0;
-        let notesCount = 0;
-        for (let r = i + 1; r < data.length; r++) {
-            const dataRow = data[r];
-            if (Array.isArray(dataRow)) {
-                if (dataRow[jcCommentsIndex] !== undefined && dataRow[jcCommentsIndex] !== null && String(dataRow[jcCommentsIndex]).trim() !== '') {
-                    jcCount++;
-                }
-                if (dataRow[notesIndex] !== undefined && dataRow[notesIndex] !== null && String(dataRow[notesIndex]).trim() !== '') {
-                    notesCount++;
-                }
-            }
-        }
-        // If notes has more content than jc comments, prefer the notes column
-        if (notesCount > jcCount) {
-            tempIndices['notesColIndex'] = notesIndex;
-        } else {
-            tempIndices['notesColIndex'] = jcCommentsIndex;
-        }
-    }
-
-    // Check if all required keys were filled
     const missingRequired = requiredKeys.filter(key => tempIndices[key] === undefined);
 
     if (missingRequired.length === 0) {
@@ -148,35 +108,90 @@ const findHeaders = (data: (string | number)[][]): {
   }
 
   if (headerRowIndex === -1) {
-    const missingCols: string[] = [];
-    const mostLikelyHeaderRow = data.find(row => Array.isArray(row) && row.some(cell => typeof cell === 'string' && cell.toLowerCase().includes('source'))) || [];
-    const lowerCaseCheckRow = mostLikelyHeaderRow.map(cell => typeof cell === 'string' ? cell.toLowerCase().trim().replace(/\s*\(.*\)\s*$/, '') : '');
-    
-    const requiredNames = ['source', 'acknowledgement', 'page number', 'usage classification', 'licence fee', 'description', 'library image no', 'rights type', 'photolog creation', 'notes'];
-    
-    for (const name of requiredNames) {
-        const hasExact = lowerCaseCheckRow.includes(name);
-        const hasRelaxed = lowerCaseCheckRow.some(cell => cell.includes(name));
-        const isNotesOK = name === 'notes' && (
-            lowerCaseCheckRow.includes('jc comments') || 
-            lowerCaseCheckRow.includes('notes') || 
-            lowerCaseCheckRow.some(cell => cell.includes('notes') || cell.includes('comment'))
-        );
-        
-        if (!hasExact && !hasRelaxed && !isNotesOK) {
-            missingCols.push(`"${name}"`);
-        }
-    }
-
-    if (missingCols.length > 0) {
-        throw new Error(`Could not find all required columns. Missing: ${missingCols.join(', ')}. Please check the Excel file headers.`);
-    }
-    throw new Error('Could not find a valid header row containing all required columns.');
+    throw new Error('Could not find a valid header row containing the required log columns (Usage Classification, Description, Library Image No, Source, Rights Type, Acknowledgement, Page Number, etc.).');
   }
 
   return { headerRowIndex, columnIndices: columnIndices as HeaderIndices };
 };
 
+export const processDataMatrix = (jsonData: (string | number)[][]): ProcessedExcelData => {
+  const { headerRowIndex, columnIndices } = findHeaders(jsonData);
+  const metadata = findMetadata(jsonData);
+  
+  // Find last non-empty row index
+  let lastNonEmptyIdx = -1;
+  for (let i = jsonData.length - 1; i > headerRowIndex; i--) {
+    const row = jsonData[i];
+    if (Array.isArray(row) && row.some(cell => cell !== null && cell !== undefined && String(cell).trim() !== '')) {
+      lastNonEmptyIdx = i;
+      break;
+    }
+  }
+
+  const sheetRecords: AcknowledgementRecord[] = [];
+  for (let i = headerRowIndex + 1; i < jsonData.length; i++) {
+    const row = jsonData[i];
+    if (!Array.isArray(row)) continue;
+
+    // Ignore last row if at least 10 cells contain identical data
+    if (i === lastNonEmptyIdx && isIgnoredLastRow(row)) {
+      continue;
+    }
+    
+    const source = row[columnIndices.sourceColIndex];
+    const acknowledgement = row[columnIndices.ackColIndex];
+    const pageNumber = row[columnIndices.pageColIndex];
+
+    const hasAnyContent = row.some(cell => cell !== null && cell !== undefined && String(cell).trim() !== '');
+
+    if (hasAnyContent) {
+      sheetRecords.push({
+        bragStatus: columnIndices.bragStatusColIndex !== undefined ? String(row[columnIndices.bragStatusColIndex] ?? '').trim() : '',
+        source: String(source ?? '').trim(),
+        acknowledgement: String(acknowledgement ?? '').trim(),
+        pageNumber: String(pageNumber ?? '').trim(),
+        usageClassification: String(row[columnIndices.usageColIndex] ?? '').trim(),
+        licenseFee: columnIndices.feeColIndex !== undefined ? String(row[columnIndices.feeColIndex] ?? '').trim() : '',
+        originalRowIndex: i,
+        description: String(row[columnIndices.descColIndex] ?? '').trim(),
+        libraryImageNo: String(row[columnIndices.imgNoColIndex] ?? '').trim(),
+        rightsType: String(row[columnIndices.rightsColIndex] ?? '').trim(),
+        photologCreation: columnIndices.photologColIndex !== undefined ? String(row[columnIndices.photologColIndex] ?? '').trim() : '',
+        statusRecleared: columnIndices.statusReclearedColIndex !== undefined ? String(row[columnIndices.statusReclearedColIndex] ?? '').trim() : '',
+        selectionsMade: columnIndices.selectionsMadeColIndex !== undefined ? String(row[columnIndices.selectionsMadeColIndex] ?? '').trim() : '',
+        notes: columnIndices.notesColIndex !== undefined ? String(row[columnIndices.notesColIndex] ?? '').trim() : '',
+        jcComments: columnIndices.jcCommentsColIndex !== undefined ? String(row[columnIndices.jcCommentsColIndex] ?? '').trim() : '',
+        aptaraComments: columnIndices.aptaraCommentsColIndex !== undefined ? String(row[columnIndices.aptaraCommentsColIndex] ?? '').trim() : '',
+        poNumber: columnIndices.poNumColIndex !== undefined ? String(row[columnIndices.poNumColIndex] ?? '').trim() : undefined,
+      });
+    }
+  }
+
+  if (sheetRecords.length === 0) {
+    throw new Error("No data rows found under the header row.");
+  }
+
+  return {
+    records: sheetRecords,
+    isbn: metadata.isbn,
+    title: metadata.title,
+    rawData: jsonData,
+    headerRowIndex: headerRowIndex,
+    columnIndices: columnIndices,
+  };
+};
+
+export const parsePastedTextToMatrix = (text: string): (string | number)[][] => {
+  const lines = text.split(/\r?\n/);
+  return lines.map(line => {
+    if (line.includes('\t')) {
+      return line.split('\t').map(cell => cell.trim());
+    } else if (line.includes(',')) {
+      return line.split(',').map(cell => cell.trim());
+    }
+    return [line.trim()];
+  }).filter(row => row.some(cell => cell !== ''));
+};
 
 export const processExcelFile = (file: File): Promise<ProcessedExcelData> => {
   return new Promise((resolve, reject) => {
@@ -187,7 +202,7 @@ export const processExcelFile = (file: File): Promise<ProcessedExcelData> => {
         // @ts-ignore
         const XLSX = window.XLSX;
         if (!XLSX) {
-            throw new Error('The library for reading Excel files (xlsx) could not be found. Please check your internet connection and try again.');
+          throw new Error('The library for reading Excel files (xlsx) could not be found.');
         }
 
         if (!e.target?.result) {
@@ -200,71 +215,29 @@ export const processExcelFile = (file: File): Promise<ProcessedExcelData> => {
         let processedData: ProcessedExcelData | null = null;
 
         for (const sheetName of workbook.SheetNames) {
-            const worksheet = workbook.Sheets[sheetName];
-            const jsonData: (string | number)[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-            
-            if (jsonData.length === 0) continue;
+          const worksheet = workbook.Sheets[sheetName];
+          const jsonData: (string | number)[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+          
+          if (jsonData.length === 0) continue;
 
-            try {
-                const { headerRowIndex, columnIndices } = findHeaders(jsonData);
-                const metadata = findMetadata(jsonData);
-                
-                const sheetRecords: AcknowledgementRecord[] = [];
-                for (let i = headerRowIndex + 1; i < jsonData.length; i++) {
-                    const row = jsonData[i];
-                    if (!Array.isArray(row)) continue;
-                    
-                    const source = row[columnIndices.sourceColIndex];
-                    const acknowledgement = row[columnIndices.ackColIndex];
-
-                    if (source && acknowledgement) {
-                        sheetRecords.push({
-                            source: String(source).trim(),
-                            acknowledgement: String(acknowledgement).trim(),
-                            pageNumber: String(row[columnIndices.pageColIndex] || '').trim(),
-                            usageClassification: String(row[columnIndices.usageColIndex] || '').trim(),
-                            licenseFee: String(row[columnIndices.feeColIndex] || '').trim(),
-                            originalRowIndex: i,
-                            description: String(row[columnIndices.descColIndex] || '').trim(),
-                            libraryImageNo: String(row[columnIndices.imgNoColIndex] || '').trim(),
-                            rightsType: String(row[columnIndices.rightsColIndex] || '').trim(),
-                            photologCreation: String(row[columnIndices.photologColIndex] || '').trim(),
-                            notes: String(row[columnIndices.notesColIndex] || '').trim(),
-                            poNumber: columnIndices.poNumColIndex !== undefined ? String(row[columnIndices.poNumColIndex] || '').trim() : undefined,
-                        });
-                    }
-                }
-                
-                processedData = {
-                    records: sheetRecords,
-                    isbn: metadata.isbn,
-                    title: metadata.title,
-                    rawData: jsonData,
-                    headerRowIndex: headerRowIndex,
-                    columnIndices: columnIndices,
-                };
-                break; // Found and processed the correct sheet, exit loop
-            } catch (error) {
-                // Headers not in this sheet, continue to the next
-                continue;
-            }
+          try {
+            processedData = processDataMatrix(jsonData);
+            break;
+          } catch (error) {
+            continue;
+          }
         }
         
         if (processedData === null) {
-            return reject(new Error('Could not find required columns in any sheet. Please check your Excel file.'));
+          return reject(new Error('Could not find required header columns in any sheet of the Excel file.'));
         }
 
-        if (processedData.records.length === 0) {
-            reject(new Error("No data rows found under the required headers."));
-        } else {
-            resolve(processedData);
-        }
-
+        resolve(processedData);
       } catch (error) {
         if (error instanceof Error) {
-            reject(error);
+          reject(error);
         } else {
-            reject(new Error('An unknown error occurred during file processing.'));
+          reject(new Error('An unknown error occurred during file processing.'));
         }
       }
     };

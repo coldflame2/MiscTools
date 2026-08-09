@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { MenuIcon } from './icons/MenuIcon';
 import { CreditsIcon } from './icons/CreditsIcon';
+import { FileSheetIcon } from './icons/FileSheetIcon';
 import { ChartBarIcon } from './icons/ChartBarIcon';
 import { HistoryIcon } from './icons/HistoryIcon';
 import { ExportIcon } from './icons/ExportIcon';
@@ -74,6 +75,13 @@ export const NavigationRail: React.FC<NavigationRailProps> = ({ activeView, onNa
                         isExpanded={isExpanded} 
                         isActive={activeView === 'credits'} 
                         onClick={() => onNavigate('credits')} 
+                    />
+                    <NavItem 
+                        icon={<FileSheetIcon className="w-6 h-6 flex-shrink-0" />} 
+                        label="Uploaded Log" 
+                        isExpanded={isExpanded} 
+                        isActive={activeView === 'uploadedLog'} 
+                        onClick={() => onNavigate('uploadedLog')} 
                     />
                     <NavItem 
                         icon={<DataHealthIcon className="w-6 h-6 flex-shrink-0" />} 
