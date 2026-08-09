@@ -32,7 +32,11 @@ import {
   Zap,
   FolderCheck,
   CheckSquare,
-  Square
+  Square,
+  Pencil,
+  SlidersHorizontal,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { MenuIcon } from './icons/MenuIcon';
 import {
@@ -115,13 +119,33 @@ interface ResizableIssueTableProps {
   emptyMessage: string;
 }
 
+const LOCAL_STORAGE_ISSUE_COL_WIDTHS_KEY = 'bms_issue_table_col_widths_v1';
+
 const ResizableIssueTable: React.FC<ResizableIssueTableProps> = ({ issues, emptyMessage }) => {
-  const [colWidths, setColWidths] = useState<ColumnWidths>({
-    row: 100,
-    field: 200,
-    currentValue: 240,
-    issueExplanation: 480,
+  const [colWidths, setColWidths] = useState<ColumnWidths>(() => {
+    const defaults: ColumnWidths = {
+      row: 100,
+      field: 200,
+      currentValue: 240,
+      issueExplanation: 480,
+    };
+    try {
+      const saved = localStorage.getItem(LOCAL_STORAGE_ISSUE_COL_WIDTHS_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          return { ...defaults, ...parsed };
+        }
+      }
+    } catch (e) {}
+    return defaults;
   });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LOCAL_STORAGE_ISSUE_COL_WIDTHS_KEY, JSON.stringify(colWidths));
+    } catch (e) {}
+  }, [colWidths]);
 
   const totalWidth = useMemo(() => {
     return colWidths.row + colWidths.field + colWidths.currentValue + colWidths.issueExplanation;
@@ -317,15 +341,35 @@ interface ResizableCrossIssueTableProps {
   emptyMessage: string;
 }
 
+const LOCAL_STORAGE_CROSS_ISSUE_COL_WIDTHS_KEY = 'bms_cross_issue_table_col_widths_v1';
+
 const ResizableCrossIssueTable: React.FC<ResizableCrossIssueTableProps> = ({ issues, emptyMessage }) => {
-  const [colWidths, setColWidths] = useState<CrossColumnWidths>({
-    origRow: 95,
-    finalRow: 95,
-    field: 160,
-    origValue: 190,
-    finalValue: 190,
-    issueExplanation: 450,
+  const [colWidths, setColWidths] = useState<CrossColumnWidths>(() => {
+    const defaults: CrossColumnWidths = {
+      origRow: 95,
+      finalRow: 95,
+      field: 160,
+      origValue: 190,
+      finalValue: 190,
+      issueExplanation: 450,
+    };
+    try {
+      const saved = localStorage.getItem(LOCAL_STORAGE_CROSS_ISSUE_COL_WIDTHS_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          return { ...defaults, ...parsed };
+        }
+      }
+    } catch (e) {}
+    return defaults;
   });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LOCAL_STORAGE_CROSS_ISSUE_COL_WIDTHS_KEY, JSON.stringify(colWidths));
+    } catch (e) {}
+  }, [colWidths]);
 
   const totalWidth = useMemo(() => {
     return (
@@ -561,6 +605,115 @@ const ResizableCrossIssueTable: React.FC<ResizableCrossIssueTableProps> = ({ iss
   );
 };
 
+// Default visible headers requested by user
+export const DEFAULT_VISIBLE_HEADERS = [
+  'BRAG Status',
+  'Type (read-only)',
+  'Name (mandatory)',
+  'Title',
+  'Description',
+  'Tags',
+  'Supplier Name (mandatory)',
+  'Supplier Asset ID',
+  'Metadata Complete',
+  'Status (mandatory)',
+  'Image Type (mandatory)',
+  'Original Filename (read-only)',
+  'Original Creator',
+];
+
+const DEFAULT_VISIBLE_SET = new Set(DEFAULT_VISIBLE_HEADERS);
+
+// In-App Display Rename Map
+export const DISPLAY_HEADER_MAP: Record<string, string> = {
+  'BRAG Status': 'BRAG',
+  'Type (read-only)': 'Type',
+  'Name (mandatory)': 'Name/Asset Code',
+  'Title': 'Title/ID',
+  'Description': 'Description',
+  'Tags': 'Tags',
+  'Supplier Name (mandatory)': 'Supplier',
+  'Supplier Asset ID': 'Asset ID',
+  'Metadata Complete': 'Metadata',
+  'Status (mandatory)': 'Status',
+  'Image Type (mandatory)': 'Image Type',
+  'Original Filename (read-only)': 'Filename',
+  'Original Creator': 'Creator',
+};
+
+export function getDisplayHeader(headerKey: string): string {
+  return DISPLAY_HEADER_MAP[headerKey] || headerKey;
+}
+
+const FIT_TO_CONTENT_HEADERS = new Set([
+  'BRAG Status',
+  'Type (read-only)',
+  'Name (mandatory)',
+  'Title',
+  'Supplier Asset ID',
+  'Metadata Complete',
+  'Status (mandatory)',
+  'Image Type (mandatory)',
+]);
+
+function computeColWidths(records: Record<string, string>[]): Record<string, number> {
+  const widths: Record<string, number> = {};
+
+  let maxNameLen = 0;
+  if (records && records.length > 0) {
+    records.forEach((r) => {
+      const val = r['Name (mandatory)'] || '';
+      if (val.length > maxNameLen) maxNameLen = val.length;
+    });
+  }
+  const nameWidth = Math.max(280, Math.min(550, maxNameLen * 8.5 + 40));
+
+  EXPECTED_BMS_HEADERS.forEach((h) => {
+    if (h === 'Name (mandatory)') {
+      widths[h] = nameWidth;
+    } else if (h === 'Description') {
+      widths[h] = nameWidth;
+    } else if (h === 'Tags') {
+      widths[h] = 75;
+    } else if (h === 'Supplier Name (mandatory)') {
+      widths[h] = 160;
+    } else if (FIT_TO_CONTENT_HEADERS.has(h)) {
+      let maxLen = 0;
+      if (records && records.length > 0) {
+        records.forEach((r) => {
+          const val = r[h] || '';
+          if (val.length > maxLen) maxLen = val.length;
+        });
+      }
+      if (h === 'BRAG Status') {
+        widths[h] = Math.max(70, Math.min(130, maxLen * 8.5 + 25));
+      } else if (h === 'Type (read-only)') {
+        widths[h] = Math.max(70, Math.min(130, maxLen * 8.5 + 25));
+      } else if (h === 'Title') {
+        widths[h] = Math.max(120, Math.min(400, maxLen * 8 + 30));
+      } else if (h === 'Supplier Asset ID') {
+        widths[h] = Math.max(90, Math.min(220, maxLen * 8 + 25));
+      } else if (h === 'Metadata Complete') {
+        widths[h] = Math.max(80, Math.min(140, maxLen * 8.5 + 25));
+      } else if (h === 'Status (mandatory)') {
+        widths[h] = Math.max(80, Math.min(150, maxLen * 8.5 + 25));
+      } else if (h === 'Image Type (mandatory)') {
+        widths[h] = Math.max(85, Math.min(150, maxLen * 8.5 + 25));
+      } else {
+        widths[h] = Math.max(80, Math.min(300, maxLen * 8 + 30));
+      }
+    } else if (h === 'Original Filename (read-only)') {
+      widths[h] = 160;
+    } else if (h === 'Original Creator') {
+      widths[h] = 130;
+    } else {
+      widths[h] = 160;
+    }
+  });
+
+  return widths;
+}
+
 interface EditableSpreadsheetViewerProps {
   title: string;
   fileType: 'original' | 'final';
@@ -587,6 +740,101 @@ const EditableSpreadsheetViewer: React.FC<EditableSpreadsheetViewerProps> = ({
   const [editValue, setEditValue] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [editedCells, setEditedCells] = useState<Set<string>>(new Set());
+
+  // View Customization State (Column Show/Hide & Adjustable Widths)
+  const [hiddenHeaders, setHiddenHeaders] = useState<Set<string>>(() => {
+    const hidden = new Set<string>();
+    EXPECTED_BMS_HEADERS.forEach((h) => {
+      if (!DEFAULT_VISIBLE_SET.has(h)) {
+        hidden.add(h);
+      }
+    });
+    return hidden;
+  });
+
+  const storageKey = `bms_spreadsheet_col_widths_${fileType}`;
+
+  const [showColumnCustomizer, setShowColumnCustomizer] = useState<boolean>(false);
+  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
+    const computed = computeColWidths(fileData?.result?.records || []);
+    try {
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          return { ...computed, ...parsed };
+        }
+      }
+    } catch (e) {}
+    return computed;
+  });
+
+  useEffect(() => {
+    if (fileData?.result?.records && fileData.result.records.length > 0) {
+      const computed = computeColWidths(fileData.result.records);
+      setColWidths((prev) => {
+        let savedParsed: Record<string, number> = {};
+        try {
+          const saved = localStorage.getItem(storageKey);
+          if (saved) {
+            savedParsed = JSON.parse(saved) || {};
+          }
+        } catch (e) {}
+        return { ...computed, ...prev, ...savedParsed };
+      });
+    }
+  }, [fileData?.result?.records, storageKey]);
+
+  useEffect(() => {
+    if (colWidths && Object.keys(colWidths).length > 0) {
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(colWidths));
+      } catch (e) {}
+    }
+  }, [colWidths, storageKey]);
+
+  const visibleHeaders = useMemo(() => {
+    const visible: string[] = [];
+    DEFAULT_VISIBLE_HEADERS.forEach((h) => {
+      if (!hiddenHeaders.has(h)) {
+        visible.push(h);
+      }
+    });
+    EXPECTED_BMS_HEADERS.forEach((h) => {
+      if (!DEFAULT_VISIBLE_SET.has(h) && !hiddenHeaders.has(h)) {
+        visible.push(h);
+      }
+    });
+    return visible;
+  }, [hiddenHeaders]);
+
+  const totalTableWidth = useMemo(() => {
+    const visSum = visibleHeaders.reduce((acc, h) => acc + (colWidths[h] || 180), 0);
+    return 64 + visSum;
+  }, [visibleHeaders, colWidths]);
+
+  const handleHeaderResizeMouseDown = (headerKey: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startWidth = colWidths[headerKey] || 180;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const delta = moveEvent.clientX - startX;
+      setColWidths((prev) => ({
+        ...prev,
+        [headerKey]: Math.max(65, startWidth + delta),
+      }));
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
 
   // Direct Local File Two-Way Live Sync State
   const [localHandle, setLocalHandle] = useState<any>(null);
@@ -909,7 +1157,7 @@ const EditableSpreadsheetViewer: React.FC<EditableSpreadsheetViewerProps> = ({
               placeholder="Search in grid..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-8 pr-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs w-44 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="pl-8 pr-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs w-40 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
             {searchTerm && (
               <button
@@ -918,6 +1166,113 @@ const EditableSpreadsheetViewer: React.FC<EditableSpreadsheetViewerProps> = ({
               >
                 ×
               </button>
+            )}
+          </div>
+
+          {/* Customize View / Column Picker Popover Button */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowColumnCustomizer((prev) => !prev)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 hover:border-indigo-400 rounded-lg text-xs font-bold text-slate-700 transition-colors shadow-xs cursor-pointer"
+              title="Customize spreadsheet view (Show/Hide columns, Reset widths)"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-600" />
+              <span>
+                Columns ({visibleHeaders.length}/{EXPECTED_BMS_HEADERS.length})
+              </span>
+            </button>
+
+            {showColumnCustomizer && (
+              <div className="absolute right-0 top-full mt-2 z-50 w-72 bg-white border border-slate-200 rounded-xl shadow-xl p-3 space-y-2 text-xs text-slate-700 animate-fade-in">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                  <span className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
+                    <Eye className="w-3.5 h-3.5 text-indigo-600" />
+                    Show / Hide Columns
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowColumnCustomizer(false)}
+                    className="text-slate-400 hover:text-slate-600 font-bold"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between gap-1 py-1 border-b border-slate-100 pb-2">
+                  <button
+                    type="button"
+                    onClick={() => setHiddenHeaders(new Set())}
+                    className="text-[11px] text-indigo-600 hover:underline font-semibold cursor-pointer"
+                  >
+                    Show All
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nonMandatory = EXPECTED_BMS_HEADERS.filter((h) => !h.includes('(mandatory)'));
+                      setHiddenHeaders(new Set(nonMandatory));
+                    }}
+                    className="text-[11px] text-amber-700 hover:underline font-semibold cursor-pointer"
+                  >
+                    Only Mandatory
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const hidden = new Set<string>();
+                      EXPECTED_BMS_HEADERS.forEach((h) => {
+                        if (!DEFAULT_VISIBLE_SET.has(h)) {
+                          hidden.add(h);
+                        }
+                      });
+                      setHiddenHeaders(hidden);
+                      setColWidths(computeColWidths(fileData?.result?.records || []));
+                    }}
+                    className="text-[11px] text-slate-500 hover:underline font-semibold cursor-pointer"
+                  >
+                    Reset View
+                  </button>
+                </div>
+
+                <div className="max-h-60 overflow-y-auto space-y-1.5 pr-1 pt-1">
+                  {EXPECTED_BMS_HEADERS.map((h) => {
+                    const isChecked = !hiddenHeaders.has(h);
+                    const isMandatory = h.includes('(mandatory)');
+                    return (
+                      <label
+                        key={h}
+                        className="flex items-center justify-between p-1.5 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors select-none text-xs"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              const next = new Set(hiddenHeaders);
+                              if (e.target.checked) {
+                                next.delete(h);
+                              } else {
+                                next.add(h);
+                              }
+                              setHiddenHeaders(next);
+                            }}
+                            className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer"
+                          />
+                          <span className="truncate text-slate-700 font-medium" title={getDisplayHeader(h)}>
+                            {getDisplayHeader(h)}
+                          </span>
+                        </div>
+                        {isMandatory && (
+                          <span className="text-[9px] bg-red-100 text-red-700 px-1 py-0.2 rounded font-bold flex-shrink-0">
+                            req
+                          </span>
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
             )}
           </div>
 
@@ -1003,22 +1358,12 @@ const EditableSpreadsheetViewer: React.FC<EditableSpreadsheetViewerProps> = ({
         </div>
       </div>
 
-      {/* Direct Local File Auto-Sync Notification Toast */}
-      {localSyncStatusMsg && (
-        <div className="bg-emerald-50 border border-emerald-300 text-emerald-900 px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center justify-between shadow-2xs animate-fade-in">
-          <div className="flex items-center gap-2">
-            <Zap className="w-4 h-4 text-emerald-600 fill-emerald-600 animate-pulse" />
-            <span>{localSyncStatusMsg}</span>
-          </div>
-          <span className="text-[10px] text-emerald-700 font-mono bg-emerald-100 px-2 py-0.5 rounded font-bold">
-            0ms Live 2-Way Sync
-          </span>
-        </div>
-      )}
-
-      {/* Grid Container with Full Scrollability */}
+      {/* Grid Container with Full Scrollability, Width Resizing, and Custom Columns */}
       <div className="relative w-full border border-slate-200 rounded-xl overflow-auto max-h-[580px] bg-white shadow-2xs">
-        <table className="table-auto min-w-max text-left text-xs text-slate-700 border-collapse">
+        <table
+          className="table-fixed text-left text-xs text-slate-700 border-collapse"
+          style={{ width: `${totalTableWidth}px` }}
+        >
           <thead className="sticky top-0 z-20 bg-slate-100 font-bold border-b border-slate-300 text-[11px] uppercase tracking-wider text-slate-700 select-none shadow-xs">
             <tr>
               {/* Sticky Top-Left Corner Cell: Excel Row */}
@@ -1027,25 +1372,39 @@ const EditableSpreadsheetViewer: React.FC<EditableSpreadsheetViewerProps> = ({
               </th>
 
               {/* Header Columns */}
-              {EXPECTED_BMS_HEADERS.map((h) => {
+              {visibleHeaders.map((h) => {
                 const isMandatory = h.includes('(mandatory)');
                 const isReadOnly = h.includes('(read-only)');
+                const colWidth = colWidths[h] || 180;
+
                 return (
                   <th
                     key={h}
-                    className={`p-2.5 border-r border-slate-300 whitespace-nowrap min-w-[140px] max-w-[280px] ${
+                    style={{ width: `${colWidth}px`, minWidth: `${colWidth}px`, maxWidth: `${colWidth}px` }}
+                    className={`relative p-2.5 border-r border-slate-300 whitespace-nowrap overflow-hidden text-ellipsis ${
                       fileType === 'original' ? 'bg-slate-100 text-slate-800' : 'bg-purple-100/80 text-purple-950'
                     }`}
                   >
-                    <div className="flex items-center justify-between gap-1">
-                      <span>{h}</span>
+                    <div className="flex items-center justify-between gap-1 pr-2">
+                      <span className="truncate">{getDisplayHeader(h)}</span>
                       {isMandatory && (
-                        <span className="text-[9px] bg-red-100 text-red-700 px-1 py-0.2 rounded font-bold">req</span>
+                        <span className="text-[9px] bg-red-100 text-red-700 px-1 py-0.2 rounded font-bold flex-shrink-0">
+                          req
+                        </span>
                       )}
                       {isReadOnly && (
-                        <span className="text-[9px] bg-slate-200 text-slate-600 px-1 py-0.2 rounded font-normal">ro</span>
+                        <span className="text-[9px] bg-slate-200 text-slate-600 px-1 py-0.2 rounded font-normal flex-shrink-0">
+                          ro
+                        </span>
                       )}
                     </div>
+
+                    {/* Column Resize Handle */}
+                    <div
+                      onMouseDown={(e) => handleHeaderResizeMouseDown(h, e)}
+                      className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-indigo-400/60 active:bg-indigo-600 transition-colors z-10"
+                      title="Drag to resize column width"
+                    />
                   </th>
                 );
               })}
@@ -1055,7 +1414,7 @@ const EditableSpreadsheetViewer: React.FC<EditableSpreadsheetViewerProps> = ({
           <tbody className="divide-y divide-slate-200">
             {filteredRecords.length === 0 ? (
               <tr>
-                <td colSpan={EXPECTED_BMS_HEADERS.length + 1} className="p-8 text-center text-slate-400 text-xs">
+                <td colSpan={visibleHeaders.length + 1} className="p-8 text-center text-slate-400 text-xs">
                   {searchTerm ? 'No cells match your search filter.' : 'No data records found.'}
                 </td>
               </tr>
@@ -1071,26 +1430,26 @@ const EditableSpreadsheetViewer: React.FC<EditableSpreadsheetViewerProps> = ({
                     </td>
 
                     {/* Data Cells */}
-                    {EXPECTED_BMS_HEADERS.map((h) => {
+                    {visibleHeaders.map((h) => {
                       const val = rec[h] || '';
                       const isMandatoryCol = h.includes('(mandatory)');
                       const isMissingMandatory = isMandatoryCol && !val;
                       const isEditing = editingCell?.excelRow === rowNum && editingCell?.headerKey === h;
                       const isEdited = editedCells.has(`${rowNum}-${h}`);
                       const options = getDropdownOptions(h);
+                      const colWidth = colWidths[h] || 180;
 
                       return (
                         <td
                           key={h}
-                          onDoubleClick={() => handleStartEdit(rowNum, h, val)}
-                          className={`p-1.5 border-r border-slate-200 min-w-[140px] max-w-[280px] text-xs relative ${
+                          style={{ width: `${colWidth}px`, minWidth: `${colWidth}px`, maxWidth: `${colWidth}px` }}
+                          className={`p-1 border-r border-slate-200 text-xs relative overflow-hidden ${
                             isMissingMandatory
                               ? 'bg-red-50 text-red-900 font-semibold'
                               : isEdited
                               ? 'bg-emerald-50/80 text-emerald-900 font-medium'
                               : ''
                           }`}
-                          title={`Click to edit cell value (${h})`}
                         >
                           {isEditing ? (
                             <div className="flex items-center gap-1">
@@ -1132,23 +1491,28 @@ const EditableSpreadsheetViewer: React.FC<EditableSpreadsheetViewerProps> = ({
                                   e.preventDefault();
                                   handleCommitEdit(rowNum, h);
                                 }}
-                                className="p-1 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-[10px]"
+                                className="p-1 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-[10px] cursor-pointer"
                                 title="Save edit"
                               >
                                 <Check className="w-3 h-3" />
                               </button>
                             </div>
                           ) : (
-                            <div
-                              onClick={() => handleStartEdit(rowNum, h, val)}
-                              className="cursor-pointer hover:bg-indigo-50/80 p-1 rounded transition-colors min-h-[24px] flex items-center justify-between group/cell"
-                            >
-                              <span className="truncate">
+                            <div className="p-0.5 rounded min-h-[24px] flex items-center justify-between group/cell w-full">
+                              <span className="truncate pr-1 select-text text-slate-800">
                                 {val || <span className="text-slate-300 italic">-</span>}
                               </span>
-                              <span className="opacity-0 group-hover/cell:opacity-100 text-[10px] text-indigo-500 font-sans ml-1 flex-shrink-0">
-                                ✎
-                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleStartEdit(rowNum, h, val);
+                                }}
+                                className="opacity-30 group-hover/cell:opacity-100 hover:opacity-100 p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-100 rounded transition-all cursor-pointer flex-shrink-0"
+                                title={`Click pencil icon to edit cell (${h})`}
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
                             </div>
                           )}
                         </td>
@@ -1161,6 +1525,26 @@ const EditableSpreadsheetViewer: React.FC<EditableSpreadsheetViewerProps> = ({
           </tbody>
         </table>
       </div>
+
+      {/* Floating Glassy Toast Notification for Local Disk Sync */}
+      {localSyncStatusMsg && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center pointer-events-none max-w-lg w-full px-4">
+          <div className="pointer-events-auto bg-slate-900/85 backdrop-blur-md text-emerald-300 border border-emerald-500/40 shadow-2xl px-4 py-2.5 rounded-full text-xs font-semibold flex items-center justify-between gap-3 animate-fade-in max-w-full">
+            <div className="flex items-center gap-2 truncate">
+              <Zap className="w-4 h-4 text-emerald-400 fill-emerald-400 animate-pulse flex-shrink-0" />
+              <span className="truncate text-slate-100">{localSyncStatusMsg}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setLocalSyncStatusMsg(null)}
+              className="text-slate-400 hover:text-white hover:bg-white/15 rounded-full p-1 text-[11px] font-bold leading-none transition-colors cursor-pointer flex-shrink-0"
+              title="Dismiss notification"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Modal for Iframe Cross-Origin Restriction Notice */}
       {showIframeModal && (
@@ -1321,18 +1705,105 @@ export const BmsValidation: React.FC = () => {
   const [isProcessingFinal, setIsProcessingFinal] = useState(false);
   const [isDraggingOriginal, setIsDraggingOriginal] = useState(false);
   const [isDraggingFinal, setIsDraggingFinal] = useState(false);
+  const [isDraggingSingle, setIsDraggingSingle] = useState(false);
   const [copiedSuccess, setCopiedSuccess] = useState(false);
   const [pasteNotification, setPasteNotification] = useState<string | null>(null);
+
+  // Name length validation interactive state
+  const [bypassedFinalLength, setBypassedFinalLength] = useState<boolean>(false);
+  const [showOutlierList, setShowOutlierList] = useState<boolean>(false);
+
+  // Filters state
+  const [activeFileFilter, setActiveFileFilter] = useState<'all' | 'original' | 'final' | 'cross'>('all');
+  const [activeCategoryFilter, setActiveCategoryFilter] = useState<'all' | 'mandatory' | 'type_value' | 'brag_metadata' | 'cross_discrepancy' | 'header_missing'>('all');
+  const [activeSeverityFilter, setActiveSeverityFilter] = useState<'all' | 'error' | 'warning' | 'info'>('all');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [activeTab, setActiveTab] = useState<'issues' | 'data_original' | 'data_final' | 'rules'>('issues');
+  const [issuesSubTab, setIssuesSubTab] = useState<'original' | 'final' | 'cross'>('original');
+  const [isNavExpanded, setIsNavExpanded] = useState<boolean>(true);
 
   const originalInputRef = useRef<HTMLInputElement>(null);
   const finalInputRef = useRef<HTMLInputElement>(null);
   const dualInputRef = useRef<HTMLInputElement>(null);
+  const singleUploadInputRef = useRef<HTMLInputElement>(null);
 
   // OneDrive / Online Link State
   const [showOneDriveBox, setShowOneDriveBox] = useState<boolean>(false);
   const [originalUrlInput, setOriginalUrlInput] = useState<string>('');
   const [finalUrlInput, setFinalUrlInput] = useState<string>('');
   const [showAddLinkModal, setShowAddLinkModal] = useState<boolean>(false);
+
+  // 2-Way Sync Prompt Modal State
+  const [showBindPromptModal, setShowBindPromptModal] = useState<boolean>(false);
+  const [showTopIframeModal, setShowTopIframeModal] = useState<boolean>(false);
+
+  const handleTriggerTopLevelBind = useCallback(async () => {
+    const isIframe = typeof window !== 'undefined' && window.self !== window.top;
+    if (isIframe) {
+      setShowTopIframeModal(true);
+      return;
+    }
+
+    if (!('showOpenFilePicker' in window) && !('showSaveFilePicker' in window)) {
+      alert(
+        'Direct Local File Sync requires the File System Access API (supported on Desktop Chrome, Edge, and Brave). Please open this app in Chrome/Edge/Brave to write directly to local files.'
+      );
+      return;
+    }
+
+    try {
+      let handle: any = null;
+      if ('showOpenFilePicker' in window) {
+        try {
+          const [pickerHandle] = await (window as any).showOpenFilePicker({
+            types: [
+              {
+                description: 'Excel Spreadsheet (*.xlsx)',
+                accept: {
+                  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+                },
+              },
+            ],
+            multiple: false,
+          });
+          handle = pickerHandle;
+        } catch (e: any) {
+          if (e.name === 'AbortError') return;
+        }
+      }
+
+      if (!handle && 'showSaveFilePicker' in window) {
+        const suggested = originalFile.fileName || finalFile.fileName || 'BMS_Log.xlsx';
+        handle = await (window as any).showSaveFilePicker({
+          suggestedName: suggested,
+          types: [
+            {
+              description: 'Excel Spreadsheet (*.xlsx)',
+              accept: {
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+              },
+            },
+          ],
+        });
+      }
+
+      if (handle) {
+        setPasteNotification(`⚡ Bound local disk file "${handle.name}" for 2-Way Live Auto-Sync! Edits in app or local file will sync in real time.`);
+        setTimeout(() => setPasteNotification(null), 5000);
+        if (activeTab === 'upload') {
+          setActiveTab('data_original');
+        }
+      }
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        if (err?.message?.includes('sub frame') || err?.message?.includes('Cross origin') || err?.name === 'SecurityError') {
+          setShowTopIframeModal(true);
+        } else {
+          alert('Could not bind local file: ' + (err?.message || err));
+        }
+      }
+    }
+  }, [originalFile.fileName, finalFile.fileName, activeTab]);
 
   // Handler to fetch or refresh Excel content from OneDrive / Online URL
   const handleFetchOnlineUrl = useCallback(
@@ -1446,19 +1917,6 @@ export const BmsValidation: React.FC = () => {
     },
     []
   );
-
-  // Name length validation interactive state
-  const [bypassedFinalLength, setBypassedFinalLength] = useState<boolean>(false);
-  const [showOutlierList, setShowOutlierList] = useState<boolean>(false);
-
-  // Filters state
-  const [activeFileFilter, setActiveFileFilter] = useState<'all' | 'original' | 'final' | 'cross'>('all');
-  const [activeCategoryFilter, setActiveCategoryFilter] = useState<'all' | 'mandatory' | 'type_value' | 'brag_metadata' | 'cross_discrepancy' | 'header_missing'>('all');
-  const [activeSeverityFilter, setActiveSeverityFilter] = useState<'all' | 'error' | 'warning' | 'info'>('all');
-  const [searchTerm, setSearchTerm] = useState('');
-  const [activeTab, setActiveTab] = useState<'issues' | 'data_original' | 'data_final' | 'rules'>('issues');
-  const [issuesSubTab, setIssuesSubTab] = useState<'original' | 'final' | 'cross'>('original');
-  const [isNavExpanded, setIsNavExpanded] = useState<boolean>(true);
 
   // Parse excel/csv buffer using window.XLSX
   const parseFileToMatrix = useCallback(async (file: File): Promise<(string | number)[][]> => {
@@ -1671,6 +2129,44 @@ export const BmsValidation: React.FC = () => {
     [computeNameConsistencyScore]
   );
 
+  // Auto-detect role for a single file matrix based on Name length consistency & filename
+  const autoDetectSingleFileRole = useCallback(
+    (matrix: (string | number)[][], fileName: string): 'original' | 'final' => {
+      const score = computeNameConsistencyScore(matrix, fileName);
+      const lowerName = fileName.toLowerCase();
+
+      if (
+        lowerName.includes('final') ||
+        lowerName.includes('recoded') ||
+        lowerName.includes('re-coded') ||
+        lowerName.includes('recode') ||
+        lowerName.includes('clean')
+      ) {
+        return 'final';
+      }
+      if (
+        lowerName.includes('orig') ||
+        lowerName.includes('original') ||
+        lowerName.includes('hires') ||
+        lowerName.includes('hi-res') ||
+        lowerName.includes('raw')
+      ) {
+        return 'original';
+      }
+
+      if (score.analysis.isUniformLength && score.analysis.totalCount > 0) {
+        return 'final';
+      }
+
+      if (score.consistencyRatio >= 0.7) {
+        return 'final';
+      }
+
+      return 'original';
+    },
+    [computeNameConsistencyScore]
+  );
+
   // Handle upload of multiple or single files
   const handleMultipleOrSingleUpload = useCallback(
     async (filesList: FileList | File[], targetPreference?: 'original' | 'final') => {
@@ -1693,20 +2189,67 @@ export const BmsValidation: React.FC = () => {
         }
       } else if (fileArray.length === 1) {
         const singleFile = fileArray[0];
-        if (targetPreference === 'original') {
-          processOriginalFile(singleFile);
-        } else if (targetPreference === 'final') {
-          processFinalFile(singleFile);
-        } else {
-          if (!originalFile.result) {
-            processOriginalFile(singleFile);
+        setIsProcessingOriginal(true);
+        setIsProcessingFinal(true);
+        try {
+          const matrix = await parseFileToMatrix(singleFile);
+
+          if (targetPreference === 'original') {
+            const result = validateBmsFile(matrix, singleFile.name, 'original');
+            setOriginalFile({ file: singleFile, fileName: singleFile.name, matrix, result });
+            setPasteNotification(`Loaded Original Hi-Res file "${singleFile.name}"`);
+            setTimeout(() => setPasteNotification(null), 3500);
+          } else if (targetPreference === 'final') {
+            const result = validateBmsFile(matrix, singleFile.name, 'final');
+            setFinalFile({ file: singleFile, fileName: singleFile.name, matrix, result });
+            setPasteNotification(`Loaded Final Recoded file "${singleFile.name}"`);
+            setTimeout(() => setPasteNotification(null), 3500);
           } else {
-            processFinalFile(singleFile);
+            // Smart auto-detect role or combine with existing file
+            if (!originalFile.result && !finalFile.result) {
+              const detectedRole = autoDetectSingleFileRole(matrix, singleFile.name);
+              const result = validateBmsFile(matrix, singleFile.name, detectedRole);
+              if (detectedRole === 'final') {
+                setFinalFile({ file: singleFile, fileName: singleFile.name, matrix, result });
+                setPasteNotification(`⚡ Auto-detected "${singleFile.name}" as Final Recoded log`);
+              } else {
+                setOriginalFile({ file: singleFile, fileName: singleFile.name, matrix, result });
+                setPasteNotification(`⚡ Auto-detected "${singleFile.name}" as Original Hi-Res log`);
+              }
+              setTimeout(() => setPasteNotification(null), 4000);
+            } else if (originalFile.result && !finalFile.result) {
+              await classifyAndStoreTwoFiles(
+                { name: originalFile.fileName, file: originalFile.file, matrix: originalFile.matrix },
+                { name: singleFile.name, file: singleFile, matrix }
+              );
+            } else if (!originalFile.result && finalFile.result) {
+              await classifyAndStoreTwoFiles(
+                { name: finalFile.fileName, file: finalFile.file, matrix: finalFile.matrix },
+                { name: singleFile.name, file: singleFile, matrix }
+              );
+            } else {
+              const detectedRole = autoDetectSingleFileRole(matrix, singleFile.name);
+              const result = validateBmsFile(matrix, singleFile.name, detectedRole);
+              if (detectedRole === 'final') {
+                setFinalFile({ file: singleFile, fileName: singleFile.name, matrix, result });
+                setPasteNotification(`Replaced Final Recoded file with "${singleFile.name}"`);
+              } else {
+                setOriginalFile({ file: singleFile, fileName: singleFile.name, matrix, result });
+                setPasteNotification(`Replaced Original Hi-Res file with "${singleFile.name}"`);
+              }
+              setTimeout(() => setPasteNotification(null), 3500);
+            }
           }
+        } catch (err: any) {
+          alert(`Error parsing uploaded file: ${err?.message || 'Unknown error'}`);
+        } finally {
+          setIsProcessingOriginal(false);
+          setIsProcessingFinal(false);
+          setShowBindPromptModal(true);
         }
       }
     },
-    [parseFileToMatrix, classifyAndStoreTwoFiles, processOriginalFile, processFinalFile, originalFile.result]
+    [parseFileToMatrix, classifyAndStoreTwoFiles, originalFile, finalFile, autoDetectSingleFileRole]
   );
 
   // Handle Original File Upload via input
@@ -1731,6 +2274,27 @@ export const BmsValidation: React.FC = () => {
   };
 
   // Drag and drop event handlers
+  const handleDragOverSingle = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingSingle(true);
+  };
+
+  const handleDragLeaveSingle = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingSingle(false);
+  };
+
+  const handleDropSingle = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingSingle(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleMultipleOrSingleUpload(e.dataTransfer.files);
+    }
+  };
+
   const handleDragOverOriginal = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -2508,22 +3072,6 @@ export const BmsValidation: React.FC = () => {
       <div className="space-y-4 pb-12">
         {renderThinHeader()}
 
-        {/* Paste Notification Banner */}
-        {pasteNotification && (
-          <div className="bg-indigo-600 text-white px-4 py-3 rounded-xl shadow-lg flex items-center justify-between animate-fade-in max-w-2xl mx-auto">
-            <div className="flex items-center gap-2 text-sm font-semibold">
-              <ClipboardPaste className="w-5 h-5 text-indigo-200" />
-              <span>{pasteNotification}</span>
-            </div>
-            <button
-              onClick={() => setPasteNotification(null)}
-              className="text-xs bg-indigo-700 hover:bg-indigo-800 px-2 py-1 rounded-md transition-colors"
-            >
-              Dismiss
-            </button>
-          </div>
-        )}
-
         {/* Contact Sheets style Upload Initial Workspace */}
         <div className="flex-grow flex flex-col items-center justify-center p-1 max-w-2xl mx-auto text-center mt-6 mb-12">
           <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mb-4 border border-blue-100 shadow-2xs">
@@ -2536,99 +3084,57 @@ export const BmsValidation: React.FC = () => {
           </p>
 
           <div className="mt-6 w-full max-w-lg">
-            {/* Smart Dual-File Upload / Drop Zone */}
+            {/* Single Unified Upload Drop Zone */}
             <div
-              onClick={() => dualInputRef.current?.click()}
-              onDragOver={handleDragOverOriginal}
-              onDragLeave={handleDragLeaveOriginal}
-              onDrop={handleDropOriginal}
-              className="w-full bg-gradient-to-r from-indigo-50/80 via-purple-50/80 to-blue-50/80 border-2 border-dashed border-indigo-300 hover:border-indigo-500 rounded-xl p-3.5 mb-3 text-center cursor-pointer transition-all hover:shadow-sm group"
+              onClick={() => singleUploadInputRef.current?.click()}
+              onDragOver={handleDragOverSingle}
+              onDragLeave={handleDragLeaveSingle}
+              onDrop={handleDropSingle}
+              className={`w-full cursor-pointer p-8 border-2 border-dashed rounded-2xl transition-all text-center flex flex-col items-center justify-center group shadow-2xs ${
+                isDraggingSingle
+                  ? 'border-indigo-600 bg-indigo-50/90 ring-4 ring-indigo-100 scale-[1.01]'
+                  : 'border-slate-300 hover:border-indigo-500 bg-white hover:bg-indigo-50/30'
+              }`}
             >
               <input
                 type="file"
-                ref={dualInputRef}
+                ref={singleUploadInputRef}
                 className="hidden"
                 multiple
                 accept=".xlsx,.xls,.xlsm,.xlsb,.csv"
-                onChange={handleDualUpload}
+                onChange={(e) => {
+                  if (e.target.files && e.target.files.length > 0) {
+                    handleMultipleOrSingleUpload(e.target.files);
+                  }
+                }}
                 disabled={isProcessingOriginal || isProcessingFinal}
               />
-              <div className="flex items-center justify-center gap-2 text-indigo-700 font-bold text-xs sm:text-sm">
-                <Sparkles className="w-4 h-4 text-indigo-600 animate-pulse" />
-                <span>Upload, Drop, or Paste 2 Files Together</span>
-                <span className="bg-indigo-100 text-indigo-800 text-[10px] px-2 py-0.5 rounded-full font-semibold border border-indigo-200">
-                  Auto-Detects Roles
+
+              <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mb-3 group-hover:scale-105 transition-transform border border-indigo-100">
+                <FileSpreadsheet className="w-7 h-7" />
+              </div>
+
+              <span className="font-bold text-base text-slate-800 group-hover:text-indigo-700">
+                Upload BMS Spreadsheet(s)
+              </span>
+
+              <p className="text-xs text-slate-500 mt-1 max-w-xs leading-relaxed">
+                Select or drop 1 or 2 Excel / CSV files. The app automatically detects whether the log is <strong>Original Hi-Res</strong> or <strong>Final Recoded</strong>.
+              </p>
+
+              <div className="mt-4 flex items-center gap-2">
+                <span className="px-3 py-1 bg-indigo-50 text-indigo-700 font-bold text-xs rounded-lg border border-indigo-100 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                  Auto-Detects File Type
                 </span>
               </div>
-              <p className="text-[11px] text-slate-500 mt-1">
-                Select or drag both spreadsheets at once — automatically classified based on asset <strong className="text-slate-700 font-semibold">Name</strong> consistency.
-              </p>
-            </div>
 
-            <div className="flex flex-col sm:flex-row gap-3 justify-center w-full">
-              {/* Slot 1: Original Hi-Res File */}
-              <div
-                onClick={() => originalInputRef.current?.click()}
-                onDragOver={handleDragOverOriginal}
-                onDragLeave={handleDragLeaveOriginal}
-                onDrop={handleDropOriginal}
-                className={`flex-1 cursor-pointer p-4 border border-dashed ${
-                  isDraggingOriginal
-                    ? 'border-blue-600 bg-blue-50/80 ring-4 ring-blue-100 scale-[1.01]'
-                    : 'border-slate-300 hover:border-blue-500 bg-white hover:bg-blue-50/50'
-                } rounded-xl transition-all text-center flex flex-col items-center justify-center group shadow-2xs`}
-              >
-                <input
-                  type="file"
-                  ref={originalInputRef}
-                  className="hidden"
-                  multiple
-                  accept=".xlsx,.xls,.xlsm,.xlsb,.csv"
-                  onChange={handleOriginalUpload}
-                  disabled={isProcessingOriginal}
-                />
-                <FileSpreadsheet className="w-7 h-7 text-slate-400 group-hover:text-blue-500 mb-1.5 transition-colors" />
-                <span className="font-semibold text-xs text-slate-700 group-hover:text-blue-700">Original Hi-Res File</span>
-                <span className="text-[11px] text-slate-400 mt-0.5">Upload original log</span>
-                {isProcessingOriginal && (
-                  <div className="mt-1.5 flex items-center gap-1.5 text-xs text-blue-600 font-semibold">
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Parsing...</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Slot 2: Final Recoded File */}
-              <div
-                onClick={() => finalInputRef.current?.click()}
-                onDragOver={handleDragOverFinal}
-                onDragLeave={handleDragLeaveFinal}
-                onDrop={handleDropFinal}
-                className={`flex-1 cursor-pointer p-4 border border-dashed ${
-                  isDraggingFinal
-                    ? 'border-purple-600 bg-purple-50/80 ring-4 ring-purple-100 scale-[1.01]'
-                    : 'border-slate-300 hover:border-blue-500 bg-white hover:bg-blue-50/50'
-                } rounded-xl transition-all text-center flex flex-col items-center justify-center group shadow-2xs`}
-              >
-                <input
-                  type="file"
-                  ref={finalInputRef}
-                  className="hidden"
-                  multiple
-                  accept=".xlsx,.xls,.xlsm,.xlsb,.csv"
-                  onChange={handleFinalUpload}
-                  disabled={isProcessingFinal}
-                />
-                <FileSpreadsheet className="w-7 h-7 text-slate-400 group-hover:text-blue-500 mb-1.5 transition-colors" />
-                <span className="font-semibold text-xs text-slate-700 group-hover:text-blue-700">Final Recoded File</span>
-                <span className="text-[11px] text-slate-400 mt-0.5">Upload recoded log</span>
-                {isProcessingFinal && (
-                  <div className="mt-1.5 flex items-center gap-1.5 text-xs text-purple-600 font-semibold">
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Parsing...</span>
-                  </div>
-                )}
-              </div>
+              {(isProcessingOriginal || isProcessingFinal) && (
+                <div className="mt-3 flex items-center gap-2 text-xs text-indigo-600 font-bold">
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Parsing &amp; Classifying Spreadsheet...</span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -2746,22 +3252,6 @@ export const BmsValidation: React.FC = () => {
   return (
     <div className="space-y-4 pb-12">
       {renderThinHeader()}
-
-      {/* Paste Notification Banner */}
-      {pasteNotification && (
-        <div className="bg-indigo-600 text-white px-4 py-3 rounded-xl shadow-lg flex items-center justify-between animate-fade-in">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <ClipboardPaste className="w-5 h-5 text-indigo-200" />
-            <span>{pasteNotification}</span>
-          </div>
-          <button
-            onClick={() => setPasteNotification(null)}
-            className="text-xs bg-indigo-700 hover:bg-indigo-800 px-2 py-1 rounded-md transition-colors"
-          >
-            Dismiss
-          </button>
-        </div>
-      )}
 
       {/* Smart Name Length Check Banner */}
       {renderNameLengthCheckBanner()}
@@ -3294,7 +3784,109 @@ export const BmsValidation: React.FC = () => {
         </div>
       </div>
 
+      {/* Floating Bottom Glassy Toast Notifications (Fixed, Overlapping, Zero Layout Shift) */}
+      {pasteNotification && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center pointer-events-none max-w-lg w-full px-4">
+          <div className="pointer-events-auto bg-slate-900/85 backdrop-blur-md text-white border border-white/20 shadow-2xl px-4 py-2.5 rounded-full text-xs font-semibold flex items-center justify-between gap-3 animate-fade-in max-w-full">
+            <div className="flex items-center gap-2 truncate">
+              <ClipboardPaste className="w-4 h-4 text-indigo-300 flex-shrink-0" />
+              <span className="truncate">{pasteNotification}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPasteNotification(null)}
+              className="text-slate-400 hover:text-white hover:bg-white/15 rounded-full p-1 text-[11px] font-bold leading-none transition-colors cursor-pointer flex-shrink-0"
+              title="Dismiss notification"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
       {renderAddLinkModal()}
+
+      {/* Modal prompting user for 2-Way Live Auto-Sync after upload */}
+      {showBindPromptModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-6 text-center space-y-4 animate-scale-up">
+            <div className="w-14 h-14 bg-indigo-50 border border-indigo-100 rounded-2xl flex items-center justify-center mx-auto text-indigo-600 shadow-xs">
+              <HardDrive className="w-7 h-7 text-indigo-600" />
+            </div>
+
+            <div>
+              <h3 className="font-extrabold text-slate-900 text-lg">Spreadsheet Uploaded!</h3>
+              <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">
+                Would you like to bind a local spreadsheet on your computer for <strong>2-Way Live Auto-Sync</strong>?
+              </p>
+              <div className="text-[11px] text-slate-600 mt-2.5 bg-slate-50 p-3 rounded-xl border border-slate-200 text-left space-y-1">
+                <p className="font-bold text-slate-800 flex items-center gap-1 text-xs">
+                  <Zap className="w-3.5 h-3.5 text-indigo-600 fill-indigo-600" />
+                  2-Way Live Auto-Sync:
+                </p>
+                <p>• Any edits made inside the app will save directly to your local file.</p>
+                <p>• Any changes made directly in Excel on your computer will auto-refresh live in the app without downloading new files.</p>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowBindPromptModal(false);
+                  handleTriggerTopLevelBind();
+                }}
+                className="flex-1 py-2.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Zap className="w-4 h-4 text-emerald-300 fill-emerald-300" />
+                <span>Bind Local File (2-Way Sync)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowBindPromptModal(false)}
+                className="py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+              >
+                Skip for Now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal for top-level iframe 2-way sync restriction */}
+      {showTopIframeModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95">
+            <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center mb-4 mx-auto">
+              <HardDrive className="w-6 h-6" />
+            </div>
+            <h3 className="text-lg font-bold text-slate-900 text-center mb-2">
+              Open App in New Tab for 2-Way Sync
+            </h3>
+            <p className="text-sm text-slate-600 text-center mb-5 leading-relaxed">
+              Browsers block native disk file access inside embedded sub-frame windows for security. To bind a local Excel file for automatic 2-way live auto-sync, open this app directly in a full window tab.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setShowTopIframeModal(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+              >
+                Close
+              </button>
+              <a
+                href={typeof window !== 'undefined' ? window.location.href : '#'}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setShowTopIframeModal(false)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 shadow-md"
+              >
+                <span>Open App in New Tab</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1418,7 +1418,7 @@ const App: React.FC = () => {
   ];
 
   return (
-    <main className="container p-2 ml-[15px] mr-[15px]">
+    <main className="w-full px-3 py-2">
       <div className="border-b border-slate-200" style={{ marginBottom: '1px', height: '25.957099999999997px' }}>
         <nav className="-mb-px flex space-x-6" aria-label="Tabs" style={{ marginBottom: '10px' }}>
           <button
