@@ -25,6 +25,7 @@ import type { AcknowledgementRecord, AppStatus, AIFlaggedRecord, ContactSheetSta
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from "docx";
 import saveAs from "file-saver";
 import { EditIcon } from './components/icons/EditIcon';
+import { Lock } from 'lucide-react';
 
 
 const cleanAcknowledgement = (ack: string, source: string): string => {
@@ -314,6 +315,7 @@ const App: React.FC = () => {
   }, [isAuthenticated]);
 
   const [passwordInput, setPasswordInput] = useState('');
+  const [passwordError, setPasswordError] = useState<string | null>(null);
 
   // Restore Assessment Log Helper data from localStorage on mount
   React.useEffect(() => {
@@ -383,26 +385,46 @@ const App: React.FC = () => {
     if (passwordInput === 'paradise' || passwordInput === 'paradise.') {
       setIsAuthenticated(true);
       setPasswordInput('');
+      setPasswordError(null);
     } else {
+      setPasswordError('Incorrect password');
       alert('Incorrect password');
     }
   };
 
   const renderPasswordForm = () => (
-    <div className="flex flex-col items-center justify-center py-20">
-      <h2 className="text-xl font-semibold text-slate-700 mb-4">Restricted Access</h2>
-      <form onSubmit={handlePasswordSubmit} className="flex gap-2">
-        <input 
-          type="password" 
-          value={passwordInput}
-          onChange={(e) => setPasswordInput(e.target.value)}
-          className="border border-slate-300 rounded px-3 py-2 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-          placeholder="Enter password"
-        />
-        <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors">
-          Submit
-        </button>
-      </form>
+    <div className="flex flex-col items-center justify-center py-20 px-4">
+      <div className="bg-white border border-slate-200 rounded-xl p-8 shadow-sm max-w-sm w-full text-center">
+        <div className="w-12 h-12 bg-slate-100 text-slate-600 rounded-full flex items-center justify-center mx-auto mb-3">
+          <Lock className="w-6 h-6 text-slate-700" />
+        </div>
+        <h2 className="text-lg font-semibold text-slate-800 mb-1">Restricted Access</h2>
+        <p className="text-xs text-slate-500 mb-4">Enter the password to access this protected tab.</p>
+        <form onSubmit={handlePasswordSubmit} className="flex flex-col gap-2">
+          <div className="flex gap-2">
+            <input 
+              type="password" 
+              value={passwordInput}
+              onChange={(e) => {
+                setPasswordInput(e.target.value);
+                if (passwordError) setPasswordError(null);
+              }}
+              className="border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 flex-1"
+              placeholder="Enter password"
+              autoFocus
+            />
+            <button 
+              type="submit" 
+              className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors shadow-sm"
+            >
+              Submit
+            </button>
+          </div>
+          {passwordError && (
+            <p className="text-xs text-red-600 font-medium text-left">{passwordError}</p>
+          )}
+        </form>
+      </div>
     </div>
   );
 
@@ -1420,7 +1442,7 @@ const App: React.FC = () => {
   return (
     <main className="w-full px-3 py-2">
       <div className="border-b border-slate-200" style={{ marginBottom: '1px', height: '25.957099999999997px' }}>
-        <nav className="-mb-px flex space-x-6" aria-label="Tabs" style={{ marginBottom: '10px' }}>
+        <nav className="-mb-px flex space-x-6 items-center" aria-label="Tabs" style={{ marginBottom: '10px' }}>
           <button
             onClick={() => setActiveTab('contactSheets')}
             className={`${
@@ -1434,6 +1456,7 @@ const App: React.FC = () => {
           </button>
           <button
             onClick={() => setActiveTab('newFeature')}
+            title="Filename Parser"
             className={`${
               activeTab === 'newFeature'
                 ? 'border-blue-500 text-blue-600'
@@ -1441,10 +1464,11 @@ const App: React.FC = () => {
             } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium`}
             style={{ paddingTop: '2px', paddingBottom: '0px', height: '24px' }}
           >
-            Filename Parser
+            FP
           </button>
           <button
             onClick={() => setActiveTab('creditsCreator')}
+            title="Credits Creator"
             className={`${
               activeTab === 'creditsCreator'
                 ? 'border-blue-500 text-blue-600'
@@ -1452,10 +1476,11 @@ const App: React.FC = () => {
             } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium`}
             style={{ height: '24px', paddingTop: '2px', paddingBottom: '0px' }}
           >
-            Credits Creator
+            CC
           </button>
           <button
             onClick={() => setActiveTab('bmsValidation')}
+            title="BMS Validation"
             className={`${
               activeTab === 'bmsValidation'
                 ? 'border-blue-500 text-blue-600'
@@ -1463,10 +1488,11 @@ const App: React.FC = () => {
             } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium`}
             style={{ height: '24px', paddingTop: '2px', paddingBottom: '0px' }}
           >
-            BMS Validation
+            BV
           </button>
           <button
             onClick={() => setActiveTab('logReview')}
+            title="Log Review"
             className={`${
               activeTab === 'logReview'
                 ? 'border-blue-500 text-blue-600'
@@ -1476,10 +1502,22 @@ const App: React.FC = () => {
           >
             LR
           </button>
+          {isAuthenticated && (
+            <button
+              onClick={() => setIsAuthenticated(false)}
+              title="Lock protected tabs"
+              className="ml-auto flex items-center gap-1 text-xs text-slate-400 hover:text-slate-700 transition-colors py-0.5 px-2 rounded hover:bg-slate-100 cursor-pointer"
+            >
+              <Lock className="w-3 h-3" />
+              <span>Lock</span>
+            </button>
+          )}
         </nav>
       </div>
 
-      {activeTab === 'bmsValidation' && <BmsValidation />}
+      {activeTab === 'bmsValidation' && (
+        isAuthenticated ? <BmsValidation /> : renderPasswordForm()
+      )}
 
       {activeTab === 'logReview' && (
         isAuthenticated ? (
@@ -1522,9 +1560,13 @@ const App: React.FC = () => {
         )
       )}
 
-      {activeTab === 'newFeature' && <FilenameParser />}
+      {activeTab === 'newFeature' && (
+        isAuthenticated ? <FilenameParser /> : renderPasswordForm()
+      )}
 
-      {activeTab === 'creditsCreator' && <CreditsCreator />}
+      {activeTab === 'creditsCreator' && (
+        isAuthenticated ? <CreditsCreator /> : renderPasswordForm()
+      )}
 
       {activeTab === 'contactSheets' && <ContactSheetsTab />}
     </main>
