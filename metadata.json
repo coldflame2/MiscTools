@@ -1,5 +1,6 @@
 {
   "name": "Remix: AssessmentLogHelper2",
   "description": "Professional publishing workspace and specification compiler with custom 12x12 contact sheets, folder-based ZIP parsing, drag-and-drop overlays, layout styling presets, local IndexedDB state cache, and high-fidelity multi-page PDF generation.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
