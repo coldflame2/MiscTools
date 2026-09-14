@@ -21,11 +21,12 @@ import { ContactSheetsTab } from './components/ContactSheetsTab';
 import { UploadedLogView } from './components/UploadedLogView';
 import { CloudSyncModal } from './components/CloudSyncModal';
 import { BmsValidation } from './components/BmsValidation';
+import { CsExtractor } from './components/CsExtractor';
 import type { AcknowledgementRecord, AppStatus, AIFlaggedRecord, ContactSheetStatus, ImageAnalysisResult, ExtractedImage, AIAnalysisStatus, HeaderIndices, ActiveView } from './types';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from "docx";
 import saveAs from "file-saver";
 import { EditIcon } from './components/icons/EditIcon';
-import { Lock } from 'lucide-react';
+import { Lock, HelpCircle } from 'lucide-react';
 
 
 const cleanAcknowledgement = (ack: string, source: string): string => {
@@ -283,10 +284,10 @@ const App: React.FC = () => {
   }, [rawData, fileName]);
 
   // Active tab state with localStorage persistence
-  const [activeTab, setActiveTab] = useState<'logReview' | 'newFeature' | 'creditsCreator' | 'contactSheets' | 'bmsValidation'>(() => {
+  const [activeTab, setActiveTab] = useState<'logReview' | 'newFeature' | 'creditsCreator' | 'contactSheets' | 'bmsValidation' | 'csExtractor'>(() => {
     try {
       const saved = localStorage.getItem('app_active_tab');
-      if (saved && ['logReview', 'newFeature', 'creditsCreator', 'contactSheets', 'bmsValidation'].includes(saved)) {
+      if (saved && ['logReview', 'newFeature', 'creditsCreator', 'contactSheets', 'bmsValidation', 'csExtractor'].includes(saved)) {
         return saved as any;
       }
     } catch (e) {}
@@ -392,14 +393,22 @@ const App: React.FC = () => {
     }
   };
 
-  const renderPasswordForm = () => (
+  const renderPasswordForm = (tabName?: string) => (
     <div className="flex flex-col items-center justify-center py-20 px-4">
       <div className="bg-white border border-slate-200 rounded-xl p-8 shadow-sm max-w-sm w-full text-center">
         <div className="w-12 h-12 bg-slate-100 text-slate-600 rounded-full flex items-center justify-center mx-auto mb-3">
           <Lock className="w-6 h-6 text-slate-700" />
         </div>
         <h2 className="text-lg font-semibold text-slate-800 mb-1">Restricted Access</h2>
-        <p className="text-xs text-slate-500 mb-4">Enter the password to access this protected tab.</p>
+        <p className="text-xs text-slate-500 mb-3">
+          Enter the password to access {tabName ? <span className="font-semibold text-slate-700">{tabName}</span> : 'this protected tab'}.
+        </p>
+
+        <div className="bg-amber-50 border border-amber-200/80 rounded-lg px-3 py-2 mb-4 text-xs text-amber-900 flex items-center justify-center gap-1.5 shadow-2xs">
+          <HelpCircle className="w-4 h-4 text-amber-600 shrink-0" />
+          <span>Password hint: <strong className="font-semibold text-amber-950">&quot;Not quite heaven&quot;</strong></span>
+        </div>
+
         <form onSubmit={handlePasswordSubmit} className="flex flex-col gap-2">
           <div className="flex gap-2">
             <input 
@@ -415,7 +424,7 @@ const App: React.FC = () => {
             />
             <button 
               type="submit" 
-              className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors shadow-sm"
+              className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors shadow-sm cursor-pointer"
             >
               Submit
             </button>
@@ -1445,14 +1454,16 @@ const App: React.FC = () => {
         <nav className="-mb-px flex space-x-6 items-center" aria-label="Tabs" style={{ marginBottom: '10px' }}>
           <button
             onClick={() => setActiveTab('contactSheets')}
+            title="Contact Sheets"
             className={`${
               activeTab === 'contactSheets'
                 ? 'border-blue-500 text-blue-600'
                 : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
-            } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium`}
+            } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium flex items-center gap-1.5`}
             style={{ marginLeft: '9px', paddingTop: '2px', paddingBottom: '0px', height: '24px' }}
           >
-            Contact Sheets
+            {!isAuthenticated && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
+            <span>Contact Sheets</span>
           </button>
           <button
             onClick={() => setActiveTab('newFeature')}
@@ -1461,10 +1472,11 @@ const App: React.FC = () => {
               activeTab === 'newFeature'
                 ? 'border-blue-500 text-blue-600'
                 : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
-            } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium`}
+            } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium flex items-center gap-1.5`}
             style={{ paddingTop: '2px', paddingBottom: '0px', height: '24px' }}
           >
-            FP
+            {!isAuthenticated && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
+            <span>FP</span>
           </button>
           <button
             onClick={() => setActiveTab('creditsCreator')}
@@ -1473,10 +1485,11 @@ const App: React.FC = () => {
               activeTab === 'creditsCreator'
                 ? 'border-blue-500 text-blue-600'
                 : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
-            } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium`}
+            } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium flex items-center gap-1.5`}
             style={{ height: '24px', paddingTop: '2px', paddingBottom: '0px' }}
           >
-            CC
+            {!isAuthenticated && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
+            <span>CC</span>
           </button>
           <button
             onClick={() => setActiveTab('bmsValidation')}
@@ -1485,10 +1498,24 @@ const App: React.FC = () => {
               activeTab === 'bmsValidation'
                 ? 'border-blue-500 text-blue-600'
                 : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
-            } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium`}
+            } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium flex items-center gap-1.5`}
             style={{ height: '24px', paddingTop: '2px', paddingBottom: '0px' }}
           >
-            BV
+            {!isAuthenticated && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
+            <span>BV</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('csExtractor')}
+            title="CS Extractor"
+            className={`${
+              activeTab === 'csExtractor'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
+            } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium flex items-center gap-1.5`}
+            style={{ height: '24px', paddingTop: '2px', paddingBottom: '0px' }}
+          >
+            {!isAuthenticated && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
+            <span>CSE</span>
           </button>
           <button
             onClick={() => setActiveTab('logReview')}
@@ -1497,11 +1524,13 @@ const App: React.FC = () => {
               activeTab === 'logReview'
                 ? 'border-blue-500 text-blue-600'
                 : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
-            } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium`}
+            } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium flex items-center gap-1.5`}
             style={{ paddingTop: '2px', paddingBottom: '0px', height: '24px' }}
           >
-            LR
+            {!isAuthenticated && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
+            <span>LR</span>
           </button>
+
           {isAuthenticated && (
             <button
               onClick={() => setIsAuthenticated(false)}
@@ -1515,8 +1544,12 @@ const App: React.FC = () => {
         </nav>
       </div>
 
+      {activeTab === 'contactSheets' && (
+        isAuthenticated ? <ContactSheetsTab /> : renderPasswordForm('Contact Sheets')
+      )}
+
       {activeTab === 'bmsValidation' && (
-        isAuthenticated ? <BmsValidation /> : renderPasswordForm()
+        isAuthenticated ? <BmsValidation /> : renderPasswordForm('BMS Validation')
       )}
 
       {activeTab === 'logReview' && (
@@ -1556,19 +1589,21 @@ const App: React.FC = () => {
             {renderContent()}
           </>
         ) : (
-          renderPasswordForm()
+          renderPasswordForm('Log Review')
         )
       )}
 
       {activeTab === 'newFeature' && (
-        isAuthenticated ? <FilenameParser /> : renderPasswordForm()
+        isAuthenticated ? <FilenameParser /> : renderPasswordForm('Filename Parser')
       )}
 
       {activeTab === 'creditsCreator' && (
-        isAuthenticated ? <CreditsCreator /> : renderPasswordForm()
+        isAuthenticated ? <CreditsCreator /> : renderPasswordForm('Credits Creator')
       )}
 
-      {activeTab === 'contactSheets' && <ContactSheetsTab />}
+      {activeTab === 'csExtractor' && (
+        isAuthenticated ? <CsExtractor /> : renderPasswordForm('CS Extractor')
+      )}
     </main>
   );
 };
