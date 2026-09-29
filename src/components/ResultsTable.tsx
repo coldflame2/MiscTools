@@ -14,22 +14,42 @@ const renderTableRows = (data: AcknowledgementRecord[], validationFlagsMap: Map<
   <>
     {data.map((item) => {
         const validationReason = validationFlagsMap.get(item.originalRowIndex);
-        const isFlagged = !!validationReason;
         const reasons = validationReason ? validationReason.split('|||') : [];
+        const hasErrors = reasons.some(r => !r.startsWith('[WARNING]'));
+        const hasWarnings = reasons.some(r => r.startsWith('[WARNING]'));
+        const isFlagged = hasErrors || hasWarnings;
+
+        let rowClass = 'odd:bg-white even:bg-slate-50 hover:bg-blue-50';
+        let borderClass = 'border-red-300';
+        if (hasErrors) {
+            rowClass = 'bg-red-50 hover:bg-red-100';
+            borderClass = 'border-red-300';
+        } else if (hasWarnings) {
+            rowClass = 'bg-amber-50/60 hover:bg-amber-100/80';
+            borderClass = 'border-amber-300';
+        }
 
         return (
-            <tr key={item.originalRowIndex} className={`transition-colors align-top ${isFlagged ? 'bg-red-50 hover:bg-red-100' : 'odd:bg-white even:bg-slate-50 hover:bg-blue-50'}`}>
+            <tr key={item.originalRowIndex} className={`transition-colors align-top ${rowClass}`}>
                 <td className="px-2 py-1.5 whitespace-nowrap text-sm font-medium text-slate-800">{item.source}</td>
                 <td className="px-2 py-1.5 whitespace-normal text-sm text-slate-600">
                     <span>{item.acknowledgement}</span>
                      {isFlagged && (
-                        <div className="mt-1 space-y-1 border-l-2 border-red-300 pl-2">
-                            {reasons.map((reason, index) => (
-                                <div key={index} className="flex items-start gap-1 text-red-800">
-                                    <ErrorIcon className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-red-500" />
-                                    <span className="text-xs font-semibold">{reason}</span>
-                                </div>
-                            ))}
+                        <div className={`mt-1 space-y-1 border-l-2 ${borderClass} pl-2`}>
+                            {reasons.map((reason, index) => {
+                                const isWarning = reason.startsWith('[WARNING]');
+                                const cleanReason = isWarning ? reason.replace('[WARNING] ', '').replace('[WARNING]', '') : reason;
+                                return (
+                                    <div key={index} className={`flex items-start gap-1 ${isWarning ? 'text-amber-800' : 'text-red-800'}`}>
+                                        {isWarning ? (
+                                            <div className="w-3.5 h-3.5 mt-0.5 rounded-full bg-amber-500 flex items-center justify-center text-white text-[9px] font-bold shrink-0">!</div>
+                                        ) : (
+                                            <ErrorIcon className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-red-500" />
+                                        )}
+                                        <span className="text-xs font-semibold">{cleanReason}</span>
+                                    </div>
+                                );
+                            })}
                         </div>
                     )}
                 </td>

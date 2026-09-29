@@ -186,8 +186,20 @@ export const validateData = (
     const ackVal = String(row[columnIndices.ackColIndex] ?? '').trim();
     if (!ackVal) {
       getOrCreateFlaggedRecord(i).reasons.push('Acknowledgement is required.');
-    } else if (!ackVal.includes('/')) {
-      getOrCreateFlaggedRecord(i).reasons.push(`Acknowledgement "${ackVal}" should contain a slash "/" separating the credit from the source.`);
+    } else {
+      const isSameAsSource = ackVal.toLowerCase() === sourceVal.toLowerCase();
+      if (isSameAsSource) {
+        getOrCreateFlaggedRecord(i).reasons.push(`[WARNING] No known photographer/creator specified. Acknowledgement matches Source ("${sourceVal}") without a slash.`);
+      } else if (!ackVal.includes('/')) {
+        getOrCreateFlaggedRecord(i).reasons.push(`Acknowledgement "${ackVal}" should contain a slash "/" separating the credit from the source.`);
+      } else {
+        // Acknowledgement has a slash. Check that the last part matches the Source column value.
+        const lastSlashIndex = ackVal.lastIndexOf('/');
+        const lastPart = ackVal.substring(lastSlashIndex + 1).trim();
+        if (lastPart.toLowerCase() !== sourceVal.toLowerCase()) {
+          getOrCreateFlaggedRecord(i).reasons.push(`Acknowledgement source mismatch: Last part after slash is "${lastPart}", but the Source column says "${sourceVal}".`);
+        }
+      }
     }
 
     // 8. Page Number
@@ -242,6 +254,41 @@ export const validateData = (
         const numSelections = parseFloat(selectionsVal);
         if (isNaN(numSelections) || (numSelections !== 4 && numSelections !== 8)) {
           getOrCreateFlaggedRecord(i).reasons.push(`Selections made (£) must be blank, 4, or 8, but is "${selectionsVal}".`);
+        }
+      }
+    }
+
+    // 12. License Fee Check for Licensed Usage Classifications
+    if (columnIndices.feeColIndex !== undefined) {
+      const feeVal = String(row[columnIndices.feeColIndex] ?? '').trim();
+      const usageLower = usageVal.toLowerCase();
+      const isLicenseType = usageLower.endsWith('/license') || usageLower.includes('/license') || usageLower.includes('/ license');
+      
+      if (isLicenseType) {
+        const numFee = parseFloat(feeVal);
+        if (feeVal === '' || isNaN(numFee) || numFee === 0) {
+          getOrCreateFlaggedRecord(i).reasons.push(`License fee is required and cannot be empty or 0 when Usage Classification is "${usageVal}".`);
+        } else {
+          const lowerSource = sourceVal.toLowerCase();
+          const cleanRights = rightsVal.toUpperCase();
+          
+          if (lowerSource.includes('shutterstock')) {
+            if (cleanRights === 'RF' && numFee !== 10) {
+              getOrCreateFlaggedRecord(i).reasons.push(`License fee for Shutterstock RF must be exactly 10, but is "${feeVal}".`);
+            } else if (cleanRights === 'RM' && numFee !== 40) {
+              getOrCreateFlaggedRecord(i).reasons.push(`License fee for Shutterstock RM must be exactly 40, but is "${feeVal}".`);
+            }
+          } else if (lowerSource.includes('getty')) {
+            if (cleanRights === 'RF' && numFee !== 17.5) {
+              getOrCreateFlaggedRecord(i).reasons.push(`License fee for Getty Images RF must be exactly 17.5, but is "${feeVal}".`);
+            } else if (cleanRights === 'RM' && numFee !== 40) {
+              getOrCreateFlaggedRecord(i).reasons.push(`License fee for Getty Images RM must be exactly 40, but is "${feeVal}".`);
+            }
+          } else if (lowerSource.includes('alamy')) {
+            if (numFee !== 45 && numFee !== 29) {
+              getOrCreateFlaggedRecord(i).reasons.push(`License fee for Alamy Stock Photo must be either 45 or 29, but is "${feeVal}".`);
+            }
+          }
         }
       }
     }

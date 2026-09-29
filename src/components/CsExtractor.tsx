@@ -26,13 +26,19 @@ import {
   Maximize2,
   Sliders,
   Settings2,
-  Code
+  Code,
+  Scissors,
+  MessageSquare,
+  AlertCircle
 } from 'lucide-react';
 import {
   extractContactSheetPdf,
   generateSample82PageData,
   formatAssetsToTsv,
+  formatReviewAssetsToTsv,
+  hasValidImageExtension,
   detectVendor,
+  extractSourceAndImageId,
   formatExtractedImageFileName,
   formatCustomImageFileName,
   NAMING_PRESETS,
@@ -63,13 +69,16 @@ export const CsExtractor: React.FC = () => {
     totalSelected: number;
     totalMissing: number;
     totalMultiPage: number;
+    totalWithAdditionalComments?: number;
+    totalWithClippedExtension?: number;
+    totalNeedsReview?: number;
   } | null>(null);
 
   const [fileName, setFileName] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [progress, setProgress] = useState<ExtractionProgress | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'selected' | 'missing' | 'multipage'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'selected' | 'missing' | 'multipage' | 'two_comments' | 'clipped_extension' | 'needs_review'>('all');
   const [assetPrefix, setAssetPrefix] = useState<string>('VIBE');
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
@@ -371,17 +380,25 @@ export const CsExtractor: React.FC = () => {
         throw new Error('Excel generation library is loading, please try again in a moment.');
       }
 
-      const rows = assets.map((a, idx) => ({
-        '#': idx + 1,
-        'Page': a.pageDisplay,
-        'Asset Code': a.assetCode,
-        'Selection': a.selectedImage || '(None)',
-        'Vendor': a.vendor || '—',
-        'Raw Comment': a.comments.map(c => c.content).join(' | ') || '—',
-        'Saved Filename': formatCustomImageFileName(a, idx, namingOptions),
-        'Status': a.status,
-        'Options Count': a.candidateOptions.length
-      }));
+      // Sheet 1: All Extracted Assets
+      const rows = assets.map((a, idx) => {
+        const meta = extractSourceAndImageId(a.selectedImage || a.selectionCommentText || '');
+        const source = a.source || meta.source || '—';
+        const imageId = a.imageId || meta.imageId || '—';
+        return {
+          '#': idx + 1,
+          'Page': a.pageDisplay,
+          'Asset Code': a.assetCode,
+          'Selection': a.selectedImage || '(None)',
+          'Source': source,
+          'Image ID': imageId,
+          'Additional Comments': a.additionalCommentsText || (a.hasTwoCommentsOnPage || a.hasAdditionalComments ? 'Yes - Review Required' : 'None'),
+          'Clipped / Missing Ext?': a.hasClippedExtension ? 'YES - Missing Extension' : 'OK',
+          'Saved Filename': formatCustomImageFileName(a, idx, namingOptions),
+          'Status': a.status,
+          'Options Count': a.candidateOptions.length
+        };
+      });
 
       const worksheet = XLSX.utils.json_to_sheet(rows);
 
@@ -391,15 +408,65 @@ export const CsExtractor: React.FC = () => {
         { wch: 10 }, // Page
         { wch: 25 }, // Asset Code
         { wch: 36 }, // Selection
-        { wch: 16 }, // Vendor
-        { wch: 38 }, // Raw Comment
+        { wch: 22 }, // Source
+        { wch: 16 }, // Image ID
+        { wch: 42 }, // Additional Comments
+        { wch: 24 }, // Clipped / Missing Ext?
         { wch: 42 }, // Saved Filename
         { wch: 16 }, // Status
         { wch: 14 }  // Options Count
       ];
 
       const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'CS Extracted Selections');
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'All Extracted Assets');
+
+      // Sheet 2: Flagged for Manual Review (Additional Comments, Clipped Filename, Missing)
+      const reviewAssets = assets.filter(a =>
+        a.hasTwoCommentsOnPage || a.hasAdditionalComments || a.hasClippedExtension || a.status === 'Missing Selection' || a.status === 'Multiple Selections'
+      );
+
+      if (reviewAssets.length > 0) {
+        const reviewRows = reviewAssets.map((a, idx) => {
+          const meta = extractSourceAndImageId(a.selectedImage || a.selectionCommentText || '');
+          const source = a.source || meta.source || '—';
+          const imageId = a.imageId || meta.imageId || '—';
+          return {
+            '#': idx + 1,
+            'Page': a.pageDisplay,
+            'Asset Code': a.assetCode,
+            'Flag Reason': [
+              a.hasTwoCommentsOnPage ? '2 Comments on Page' : null,
+              a.additionalCommentReason ? a.additionalCommentReason : (a.hasAdditionalComments ? 'Additional Comments on Page' : null),
+              a.hasClippedExtension ? 'Clipped Filename (Missing Extension)' : null,
+              a.status === 'Missing Selection' ? 'Missing Selection' : null,
+              a.status === 'Multiple Selections' ? 'Multiple Selections' : null
+            ].filter(Boolean).join('; '),
+            'Selection': a.selectedImage || '(None)',
+            'Source': source,
+            'Image ID': imageId,
+            'Additional Comments': a.additionalCommentsText || a.comments.slice(1).map(c => c.content).join(' | ') || '—',
+            'Clipped / Missing Ext?': a.hasClippedExtension ? 'YES - Missing Extension' : 'OK',
+            'Candidate Suggestion': a.clippedSuggestedOption || '—',
+            'Status': a.status
+          };
+        });
+
+        const wsReview = XLSX.utils.json_to_sheet(reviewRows);
+        wsReview['!cols'] = [
+          { wch: 5 },  // #
+          { wch: 10 }, // Page
+          { wch: 25 }, // Asset Code
+          { wch: 34 }, // Flag Reason
+          { wch: 36 }, // Selection
+          { wch: 22 }, // Source
+          { wch: 16 }, // Image ID
+          { wch: 45 }, // Additional Comments
+          { wch: 24 }, // Clipped / Missing Ext?
+          { wch: 36 }, // Candidate Suggestion
+          { wch: 16 }  // Status
+        ];
+        XLSX.utils.book_append_sheet(workbook, wsReview, 'Manual Review Required');
+      }
 
       const safeName = (fileName || 'ContactSheet').replace(/\.pdf$/i, '');
       XLSX.writeFile(workbook, `${safeName}_Extracted_Selections.xlsx`);
@@ -412,16 +479,23 @@ export const CsExtractor: React.FC = () => {
   // Export to CSV
   const exportToCsv = () => {
     if (assets.length === 0) return;
-    const header = ['Page', 'Asset Code', 'Selection', 'Vendor', 'Raw Comment', 'Saved Filename', 'Status'];
-    const rows = assets.map((a, idx) => [
-      `"${a.pageDisplay.replace(/"/g, '""')}"`,
-      `"${a.assetCode.replace(/"/g, '""')}"`,
-      `"${(a.selectedImage || '').replace(/"/g, '""')}"`,
-      `"${(a.vendor || '').replace(/"/g, '""')}"`,
-      `"${(a.comments.map(c => c.content).join('; ') || '').replace(/"/g, '""')}"`,
-      `"${formatCustomImageFileName(a, idx, namingOptions).replace(/"/g, '""')}"`,
-      `"${a.status.replace(/"/g, '""')}"`
-    ]);
+    const header = ['Page', 'Asset Code', 'Selection', 'Source', 'Image ID', 'Additional Comments', 'Clipped / Missing Ext?', 'Saved Filename', 'Status'];
+    const rows = assets.map((a, idx) => {
+      const meta = extractSourceAndImageId(a.selectedImage || a.selectionCommentText || '');
+      const source = a.source || meta.source || '—';
+      const imageId = a.imageId || meta.imageId || '—';
+      return [
+        `"${a.pageDisplay.replace(/"/g, '""')}"`,
+        `"${a.assetCode.replace(/"/g, '""')}"`,
+        `"${(a.selectedImage || '').replace(/"/g, '""')}"`,
+        `"${source.replace(/"/g, '""')}"`,
+        `"${imageId.replace(/"/g, '""')}"`,
+        `"${(a.additionalCommentsText || (a.hasTwoCommentsOnPage || a.hasAdditionalComments ? 'Yes' : 'None')).replace(/"/g, '""')}"`,
+        `"${a.hasClippedExtension ? 'YES - Missing Extension' : 'OK'}"`,
+        `"${formatCustomImageFileName(a, idx, namingOptions).replace(/"/g, '""')}"`,
+        `"${a.status.replace(/"/g, '""')}"`
+      ];
+    });
 
     const csvContent = '\uFEFF' + [header.join(','), ...rows.map(r => r.join(','))].join('\r\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -441,21 +515,30 @@ export const CsExtractor: React.FC = () => {
             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: 'Page', bold: true, color: 'FFFFFF' })] })], shading: { fill: '1E293B' } }),
             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: 'Asset Code', bold: true, color: 'FFFFFF' })] })], shading: { fill: '1E293B' } }),
             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: 'Selection', bold: true, color: 'FFFFFF' })] })], shading: { fill: '1E293B' } }),
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: 'Vendor', bold: true, color: 'FFFFFF' })] })], shading: { fill: '1E293B' } }),
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: 'Raw Comment', bold: true, color: 'FFFFFF' })] })], shading: { fill: '1E293B' } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: 'Source', bold: true, color: 'FFFFFF' })] })], shading: { fill: '1E293B' } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: 'Image ID', bold: true, color: 'FFFFFF' })] })], shading: { fill: '1E293B' } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: 'Additional Comments', bold: true, color: 'FFFFFF' })] })], shading: { fill: '1E293B' } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: 'Clipped?', bold: true, color: 'FFFFFF' })] })], shading: { fill: '1E293B' } }),
             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: 'Status', bold: true, color: 'FFFFFF' })] })], shading: { fill: '1E293B' } }),
           ]
         }),
-        ...assets.map(a => new TableRow({
-          children: [
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: a.pageDisplay })] })] }),
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: a.assetCode, bold: true })] })] }),
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: a.selectedImage || '—' })] })] }),
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: a.vendor || '—' })] })] }),
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: a.comments.map(c => c.content).join('; ') || '—' })] })] }),
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: a.status })] })] }),
-          ]
-        }))
+        ...assets.map(a => {
+          const meta = extractSourceAndImageId(a.selectedImage || a.selectionCommentText || '');
+          const source = a.source || meta.source || '—';
+          const imageId = a.imageId || meta.imageId || '—';
+          return new TableRow({
+            children: [
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: a.pageDisplay })] })] }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: a.assetCode, bold: true })] })] }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: a.selectedImage || '—' })] })] }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: source })] })] }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: imageId })] })] }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: a.additionalCommentsText || (a.hasTwoCommentsOnPage || a.hasAdditionalComments ? 'Yes' : '—') })] })] }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: a.hasClippedExtension ? 'YES' : 'OK', color: a.hasClippedExtension ? 'DC2626' : '059669', bold: a.hasClippedExtension })] })] }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: a.status })] })] }),
+            ]
+          });
+        })
       ];
 
       const doc = new Document({
@@ -488,6 +571,45 @@ export const CsExtractor: React.FC = () => {
     }
   };
 
+  // Quick fix: append extension (e.g. .jpg) to clipped filename
+  const handleAppendExtension = (assetId: string, ext = '.jpg') => {
+    setAssets(prev => prev.map(a => {
+      if (a.id === assetId && a.selectedImage) {
+        const fixedImage = `${a.selectedImage}${ext}`;
+        const meta = extractSourceAndImageId(fixedImage);
+        const source = meta.source !== '—' ? meta.source : undefined;
+        const imageId = meta.imageId !== '—' ? meta.imageId : undefined;
+        const pageNum = a.selectedPageNum || a.pages[0] || 1;
+        const updatedImg = generateSynthesizedSampleImage(pageNum, a.assetCode, fixedImage, source);
+        return {
+          ...a,
+          selectedImage: fixedImage,
+          hasClippedExtension: false,
+          source,
+          imageId,
+          vendor: source,
+          extractedImage: updatedImg,
+          userEdited: true
+        };
+      }
+      return a;
+    }));
+    setCopyFeedback(`Appended ${ext} to selection!`);
+    setTimeout(() => setCopyFeedback(null), 2500);
+  };
+
+  // Copy review-only items for Excel
+  const handleCopyReviewItems = async () => {
+    const reviewTsv = formatReviewAssetsToTsv(assets);
+    try {
+      await navigator.clipboard.writeText(reviewTsv);
+      setCopyFeedback(`Copied ${reviewStats.totalNeedsReview} review rows for Excel!`);
+      setTimeout(() => setCopyFeedback(null), 3000);
+    } catch (err) {
+      console.error('Failed to copy', err);
+    }
+  };
+
   // Inline editing handler
   const startEditing = (a: AssetRecord) => {
     setEditingId(a.id);
@@ -506,12 +628,16 @@ export const CsExtractor: React.FC = () => {
         const commentText = editComment.trim();
         const firstPageMatch = parseInt(pageDisplay, 10);
         const pageNum = !isNaN(firstPageMatch) ? firstPageMatch : (a.selectedPageNum || a.pages[0] || 1);
-        const vendor = cleanedImage ? detectVendor(cleanedImage) : undefined;
-        const updatedImg = cleanedImage ? generateSynthesizedSampleImage(pageNum, code, cleanedImage, vendor) : undefined;
+        const meta = extractSourceAndImageId(cleanedImage);
+        const source = meta.source !== '—' ? meta.source : undefined;
+        const imageId = meta.imageId !== '—' ? meta.imageId : undefined;
+        const updatedImg = cleanedImage ? generateSynthesizedSampleImage(pageNum, code, cleanedImage, source) : undefined;
 
         const updatedComments = commentText
           ? [{ id: `comment-${id}`, pageNum, content: commentText }]
           : a.comments;
+
+        const hasClipped = Boolean(cleanedImage && !hasValidImageExtension(cleanedImage));
 
         return {
           ...a,
@@ -519,9 +645,12 @@ export const CsExtractor: React.FC = () => {
           selectedImage: cleanedImage,
           pageDisplay,
           status: cleanedImage ? 'Selected' : 'Missing Selection',
-          vendor,
+          source,
+          imageId,
+          vendor: source,
           comments: updatedComments,
           extractedImage: updatedImg,
+          hasClippedExtension: hasClipped,
           userEdited: true
         };
       }
@@ -539,27 +668,40 @@ export const CsExtractor: React.FC = () => {
     setAssets(prev => prev.map(a => {
       if (a.id === assetId) {
         const pageNum = a.selectedPageNum || a.pages[0] || 1;
-        const vendor = candidateText ? detectVendor(candidateText) : undefined;
-        const updatedImg = candidateText ? generateSynthesizedSampleImage(pageNum, a.assetCode, candidateText, vendor) : undefined;
+        const meta = extractSourceAndImageId(candidateText);
+        const source = meta.source !== '—' ? meta.source : undefined;
+        const imageId = meta.imageId !== '—' ? meta.imageId : undefined;
+        const updatedImg = candidateText ? generateSynthesizedSampleImage(pageNum, a.assetCode, candidateText, source) : undefined;
+        const hasClipped = Boolean(candidateText && !hasValidImageExtension(candidateText));
 
         return {
           ...a,
           selectedImage: candidateText,
           status: candidateText ? 'Selected' : 'Missing Selection',
-          vendor,
+          source,
+          imageId,
+          vendor: source,
           extractedImage: updatedImg,
+          hasClippedExtension: hasClipped,
           userEdited: true
         };
       }
       return a;
     }));
     if (inspectingAsset && inspectingAsset.id === assetId) {
-      setInspectingAsset(prev => prev ? {
-        ...prev,
-        selectedImage: candidateText,
-        status: candidateText ? 'Selected' : 'Missing Selection',
-        vendor: detectVendor(candidateText)
-      } : null);
+      setInspectingAsset(prev => {
+        if (!prev) return null;
+        const meta = extractSourceAndImageId(candidateText);
+        return {
+          ...prev,
+          selectedImage: candidateText,
+          status: candidateText ? 'Selected' : 'Missing Selection',
+          source: meta.source !== '—' ? meta.source : undefined,
+          imageId: meta.imageId !== '—' ? meta.imageId : undefined,
+          vendor: meta.source !== '—' ? meta.source : undefined,
+          hasClippedExtension: Boolean(candidateText && !hasValidImageExtension(candidateText))
+        };
+      });
     }
   };
 
@@ -575,23 +717,51 @@ export const CsExtractor: React.FC = () => {
       assetCode: `${assetPrefix || 'VIBE'}_NEW_ASSET`,
       pages: [1],
       pageDisplay: '1',
+      selectedPageNum: 1,
       selectedImage: '',
       status: 'Missing Selection',
       comments: [],
       candidateOptions: [],
+      hasAdditionalComments: false,
+      additionalComments: [],
+      hasClippedExtension: false,
       userEdited: true
     };
     setAssets(prev => [newRecord, ...prev]);
     startEditing(newRecord);
   };
 
+  // Review statistics computed from current assets
+  const reviewStats = useMemo(() => {
+    const twoCommentsCount = assets.filter(a => a.hasTwoCommentsOnPage || a.comments.length >= 2).length;
+    const clippedCount = assets.filter(a => a.hasClippedExtension).length;
+    const missingCount = assets.filter(a => a.status === 'Missing Selection').length;
+    const multiPageCount = assets.filter(a => a.pages.length > 1).length;
+    const selectedCount = assets.filter(a => a.status !== 'Missing Selection').length;
+    const totalNeedsReview = assets.filter(a =>
+      a.hasTwoCommentsOnPage || a.hasAdditionalComments || a.hasClippedExtension || a.status === 'Missing Selection' || a.status === 'Multiple Selections'
+    ).length;
+
+    return {
+      twoCommentsCount,
+      clippedCount,
+      missingCount,
+      multiPageCount,
+      selectedCount,
+      totalNeedsReview
+    };
+  }, [assets]);
+
   // Filtered assets
   const filteredAssets = useMemo(() => {
     return assets.filter(a => {
-      // Status filter
+      // Status & review filter
       if (statusFilter === 'selected' && a.status === 'Missing Selection') return false;
       if (statusFilter === 'missing' && a.status !== 'Missing Selection') return false;
       if (statusFilter === 'multipage' && a.pages.length <= 1) return false;
+      if (statusFilter === 'two_comments' && !(a.hasTwoCommentsOnPage || a.comments.length >= 2)) return false;
+      if (statusFilter === 'clipped_extension' && !a.hasClippedExtension) return false;
+      if (statusFilter === 'needs_review' && !(a.hasTwoCommentsOnPage || a.hasAdditionalComments || a.hasClippedExtension || a.status === 'Missing Selection' || a.status === 'Multiple Selections')) return false;
 
       // Search query filter
       if (searchQuery.trim()) {
@@ -787,8 +957,8 @@ export const CsExtractor: React.FC = () => {
                 )}
               </div>
 
-              {/* Status Filter Buttons */}
-              <div className="hidden sm:flex items-center bg-slate-100 p-0.5 rounded-lg text-xs font-medium text-slate-600">
+              {/* Status & Review Filter Buttons */}
+              <div className="hidden sm:flex items-center flex-wrap gap-1 bg-slate-100 p-0.5 rounded-lg text-xs font-medium text-slate-600">
                 <button
                   onClick={() => setStatusFilter('all')}
                   className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
@@ -803,7 +973,7 @@ export const CsExtractor: React.FC = () => {
                     statusFilter === 'selected' ? 'bg-white text-emerald-700 shadow-2xs font-semibold' : 'hover:text-slate-900'
                   }`}
                 >
-                  Selected ({assets.filter(a => a.status !== 'Missing Selection').length})
+                  Selected ({reviewStats.selectedCount})
                 </button>
                 <button
                   onClick={() => setStatusFilter('missing')}
@@ -811,7 +981,7 @@ export const CsExtractor: React.FC = () => {
                     statusFilter === 'missing' ? 'bg-white text-amber-700 shadow-2xs font-semibold' : 'hover:text-slate-900'
                   }`}
                 >
-                  Missing ({assets.filter(a => a.status === 'Missing Selection').length})
+                  Missing ({reviewStats.missingCount})
                 </button>
                 <button
                   onClick={() => setStatusFilter('multipage')}
@@ -819,8 +989,50 @@ export const CsExtractor: React.FC = () => {
                     statusFilter === 'multipage' ? 'bg-white text-indigo-700 shadow-2xs font-semibold' : 'hover:text-slate-900'
                   }`}
                 >
-                  Multi-page ({assets.filter(a => a.pages.length > 1).length})
+                  Multi-page ({reviewStats.multiPageCount})
                 </button>
+                {reviewStats.twoCommentsCount > 0 && (
+                  <button
+                    onClick={() => setStatusFilter(statusFilter === 'two_comments' ? 'all' : 'two_comments')}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+                      statusFilter === 'two_comments'
+                        ? 'bg-amber-600 text-white shadow-2xs font-semibold'
+                        : 'text-amber-900 bg-amber-100/80 hover:bg-amber-200/80 font-medium'
+                    }`}
+                    title="Filter pages that contain 2 comments on the same page"
+                  >
+                    <MessageSquare className="w-3 h-3" />
+                    <span>2 Comments ({reviewStats.twoCommentsCount})</span>
+                  </button>
+                )}
+                {reviewStats.clippedCount > 0 && (
+                  <button
+                    onClick={() => setStatusFilter(statusFilter === 'clipped_extension' ? 'all' : 'clipped_extension')}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+                      statusFilter === 'clipped_extension'
+                        ? 'bg-rose-600 text-white shadow-2xs font-semibold'
+                        : 'text-rose-700 hover:bg-rose-100/70'
+                    }`}
+                    title="Filter selections where filename was clipped without .jpg or image extension"
+                  >
+                    <Scissors className="w-3 h-3" />
+                    <span>Clipped .ext ({reviewStats.clippedCount})</span>
+                  </button>
+                )}
+                {reviewStats.totalNeedsReview > 0 && (
+                  <button
+                    onClick={() => setStatusFilter(statusFilter === 'needs_review' ? 'all' : 'needs_review')}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+                      statusFilter === 'needs_review'
+                        ? 'bg-slate-900 text-white shadow-2xs font-semibold'
+                        : 'bg-amber-200/80 text-amber-950 hover:bg-amber-300/80 font-bold border border-amber-300'
+                    }`}
+                    title="Filter all assets flagged for manual review"
+                  >
+                    <AlertTriangle className="w-3 h-3 text-amber-600" />
+                    <span>Needs Review ({reviewStats.totalNeedsReview})</span>
+                  </button>
+                )}
               </div>
 
               {/* Crop Mode selector */}
@@ -885,9 +1097,9 @@ export const CsExtractor: React.FC = () => {
 
               {/* Copy TSV for Excel */}
               <button
-                onClick={() => copyToClipboard(formatAssetsToTsv(filteredAssets, true), 'Copied all columns (Page, Code, Selection, Vendor, Comment, Status)')}
+                onClick={() => copyToClipboard(formatAssetsToTsv(filteredAssets, true), 'Copied columns (Page, Code, Selection, Source, Image ID, Status)')}
                 className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs font-medium transition-colors cursor-pointer shadow-2xs"
-                title="Copy all columns (Page, Asset Code, Selection, Vendor, Raw Comment, Status) formatted to paste into Excel"
+                title="Copy columns (Page, Asset Code, Selection, Source, Image ID, Additional Comments, Status) formatted to paste into Excel"
               >
                 <Copy className="w-3.5 h-3.5" />
                 <span>Copy for Excel</span>
@@ -942,6 +1154,73 @@ export const CsExtractor: React.FC = () => {
             </div>
           </div>
 
+          {/* Manual Review Attention Callout Bar */}
+          {reviewStats.totalNeedsReview > 0 && (
+            <div className="mx-4 sm:mx-6 my-3 p-3 bg-gradient-to-r from-amber-50 via-amber-50/80 to-rose-50/60 border border-amber-200/90 rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs shadow-2xs">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-7 h-7 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-2xs font-bold">
+                  <AlertTriangle className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-bold text-slate-900 text-xs">
+                      Manual Review Queue: {reviewStats.totalNeedsReview} item{reviewStats.totalNeedsReview > 1 ? 's' : ''} flagged
+                    </span>
+                    {statusFilter !== 'all' && (
+                      <button
+                        onClick={() => setStatusFilter('all')}
+                        className="text-[11px] text-indigo-600 hover:text-indigo-800 underline font-semibold cursor-pointer"
+                      >
+                        Reset Filter (show all {assets.length})
+                      </button>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-slate-600 flex items-center gap-2 flex-wrap mt-0.5">
+                    {reviewStats.twoCommentsCount > 0 && (
+                      <span className="inline-flex items-center gap-1 bg-amber-100/90 text-amber-950 px-1.5 py-0.5 rounded font-medium">
+                        <MessageSquare className="w-3 h-3 text-amber-800" />
+                        <strong>{reviewStats.twoCommentsCount}</strong> with 2 comments on page
+                      </span>
+                    )}
+                    {reviewStats.clippedCount > 0 && (
+                      <span className="inline-flex items-center gap-1">
+                        <Scissors className="w-3 h-3 text-rose-600" />
+                        <strong>{reviewStats.clippedCount}</strong> clipped filenames (missing .ext)
+                      </span>
+                    )}
+                    {reviewStats.missingCount > 0 && (
+                      <span>⚠️ <strong>{reviewStats.missingCount}</strong> missing selections</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                <button
+                  onClick={() => setStatusFilter(statusFilter === 'needs_review' ? 'all' : 'needs_review')}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-all shadow-2xs ${
+                    statusFilter === 'needs_review'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-white text-slate-800 border border-slate-300 hover:bg-slate-100'
+                  }`}
+                  title="Filter the table to show only items requiring manual review"
+                >
+                  <Filter className="w-3.5 h-3.5 text-amber-500" />
+                  <span>{statusFilter === 'needs_review' ? 'Showing Flagged Only' : 'Filter Review Rows'}</span>
+                </button>
+
+                <button
+                  onClick={handleCopyReviewItems}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold cursor-pointer transition-all shadow-2xs"
+                  title="Copy flagged review rows directly to clipboard formatted for Excel"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Copy Review TSV for Excel</span>
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Background image compilation status banner */}
           {backgroundCompilation.isCompiling && (
             <div className="mx-6 mb-3 px-4 py-2.5 bg-indigo-50/80 border border-indigo-200 rounded-xl flex items-center justify-between gap-3 text-xs text-indigo-900 animate-fade-in">
@@ -974,9 +1253,9 @@ export const CsExtractor: React.FC = () => {
                   <th className="py-2.5 px-3 w-10 text-center text-slate-400">#</th>
                   <th className="py-2.5 px-3 min-w-[85px] text-center">Page</th>
                   <th className="py-2.5 px-4 min-w-[170px]">Asset Code</th>
-                  <th className="py-2.5 px-4 min-w-[200px]">Selection</th>
-                  <th className="py-2.5 px-3 min-w-[100px]">Vendor</th>
-                  <th className="py-2.5 px-4 min-w-[190px]">Raw Comment</th>
+                  <th className="py-2.5 px-4 min-w-[220px]">Selection</th>
+                  <th className="py-2.5 px-3 min-w-[130px]">Source</th>
+                  <th className="py-2.5 px-3 min-w-[110px]">Image ID</th>
                   <th className="py-2.5 px-4 min-w-[260px]">
                     <div className="flex items-center gap-1.5">
                       <span>Extracted Image & Saved Name</span>
@@ -1011,12 +1290,16 @@ export const CsExtractor: React.FC = () => {
                     return (
                       <tr
                         key={asset.id}
-                        className={`hover:bg-blue-50/30 transition-colors ${
-                          asset.status === 'Missing Selection'
-                            ? 'bg-amber-50/15'
+                        className={`transition-colors ${
+                          asset.hasClippedExtension
+                            ? 'bg-rose-50/30 hover:bg-rose-50/45'
+                            : asset.hasAdditionalComments || asset.hasTwoCommentsOnPage
+                            ? 'bg-amber-50/30 hover:bg-amber-50/45'
+                            : asset.status === 'Missing Selection'
+                            ? 'bg-amber-50/15 hover:bg-amber-50/25'
                             : isMultiPage
-                            ? 'bg-indigo-50/10'
-                            : ''
+                            ? 'bg-indigo-50/10 hover:bg-indigo-50/20'
+                            : 'hover:bg-blue-50/30'
                         }`}
                       >
                         {/* 1. Row Number */}
@@ -1089,75 +1372,153 @@ export const CsExtractor: React.FC = () => {
                               className="w-full px-2 py-1 bg-white border border-blue-400 rounded text-xs font-mono focus:outline-blue-600"
                             />
                           ) : asset.selectedImage ? (
-                            <div className="flex items-center gap-1.5 group">
-                              <span className="font-medium text-slate-900 break-all select-all">
-                                {asset.selectedImage}
-                              </span>
-                              <button
-                                onClick={() => copyToClipboard(asset.selectedImage, `Copied ${asset.selectedImage}`)}
-                                className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer transition-opacity shrink-0"
-                                title="Copy image filename"
-                              >
-                                <Copy className="w-3 h-3" />
-                              </button>
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-1.5 group">
+                                <span className={`font-medium break-all select-all ${
+                                  asset.hasClippedExtension ? 'text-rose-900 font-bold' : 'text-slate-900'
+                                }`}>
+                                  {asset.selectedImage}
+                                </span>
+                                <button
+                                  onClick={() => copyToClipboard(asset.selectedImage, `Copied ${asset.selectedImage}`)}
+                                  className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer transition-opacity shrink-0"
+                                  title="Copy image filename"
+                                >
+                                  <Copy className="w-3 h-3" />
+                                </button>
+                              </div>
+
+                              {/* If filename is clipped / missing image extension, display warning & 1-click fixes */}
+                              {asset.hasClippedExtension && (
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span
+                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200"
+                                    title="Filename in contact sheet is clipped or missing .jpg extension"
+                                  >
+                                    <Scissors className="w-2.5 h-2.5 text-rose-600 shrink-0" />
+                                    <span>Clipped (no .ext)</span>
+                                  </span>
+
+                                  <button
+                                    onClick={() => handleAppendExtension(asset.id, '.jpg')}
+                                    className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-white border border-rose-300 text-rose-700 hover:bg-rose-50 cursor-pointer shadow-2xs transition-colors"
+                                    title="Quick fix: Append .jpg extension to filename"
+                                  >
+                                    <Plus className="w-2.5 h-2.5" />
+                                    <span>Add .jpg</span>
+                                  </button>
+
+                                  {asset.clippedSuggestedOption && (
+                                    <button
+                                      onClick={() => handlePickCandidate(asset.id, asset.clippedSuggestedOption!)}
+                                      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 border border-emerald-300 text-emerald-800 hover:bg-emerald-100 cursor-pointer shadow-2xs transition-colors truncate max-w-[170px]"
+                                      title={`Fix with candidate found on page: ${asset.clippedSuggestedOption}`}
+                                    >
+                                      <Check className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
+                                      <span className="truncate">{asset.clippedSuggestedOption}</span>
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Highlight 2 comments on this page / review required */}
+                              {(asset.hasTwoCommentsOnPage || asset.hasAdditionalComments) && (
+                                <div className="mt-1 p-1.5 bg-amber-50/90 border border-amber-200 rounded text-[11px] text-amber-900 shadow-2xs space-y-1">
+                                  <div className="flex items-center justify-between gap-1.5">
+                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-200 text-amber-950 border border-amber-300 shrink-0">
+                                      <MessageSquare className="w-3 h-3 text-amber-800 shrink-0" />
+                                      2 Comments on Page
+                                    </span>
+                                    <button
+                                      onClick={() => setInspectingAsset(asset)}
+                                      className="text-[10px] text-amber-800 hover:text-amber-950 underline font-semibold shrink-0 cursor-pointer"
+                                      title="View both comments on this page"
+                                    >
+                                      Review
+                                    </button>
+                                  </div>
+                                  {asset.additionalCommentReason && (
+                                    <p className="truncate font-sans text-amber-900/90 text-[10px]" title={asset.additionalCommentReason}>
+                                      {asset.additionalCommentReason}
+                                    </p>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           ) : (
-                            <div className="flex items-center gap-2 text-slate-400 italic">
-                              <span>No image selected</span>
-                              {asset.candidateOptions.length > 0 && (
-                                <button
-                                  onClick={() => setInspectingAsset(asset)}
-                                  className="not-italic text-[11px] text-blue-600 hover:text-blue-800 font-sans font-medium underline cursor-pointer"
-                                >
-                                  Pick from {asset.candidateOptions.length} options
-                                </button>
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2 text-slate-400 italic">
+                                <span>No image selected</span>
+                                {asset.candidateOptions.length > 0 && (
+                                  <button
+                                    onClick={() => setInspectingAsset(asset)}
+                                    className="not-italic text-[11px] text-blue-600 hover:text-blue-800 font-sans font-medium underline cursor-pointer"
+                                  >
+                                    Pick from {asset.candidateOptions.length} options
+                                  </button>
+                                )}
+                              </div>
+                              {/* Show 2 Comments flag if comments exist on missing page */}
+                              {(asset.hasTwoCommentsOnPage || asset.hasAdditionalComments) && (
+                                <div className="p-1 bg-amber-50 border border-amber-200 rounded flex items-center justify-between gap-1 text-[10px] text-amber-900">
+                                  <span className="font-bold">2 Comments on Page</span>
+                                  <button
+                                    onClick={() => setInspectingAsset(asset)}
+                                    className="underline font-semibold cursor-pointer"
+                                  >
+                                    Review
+                                  </button>
+                                </div>
                               )}
                             </div>
                           )}
                         </td>
 
-                        {/* 5. Vendor */}
+                        {/* 5. Source */}
                         <td className="py-2.5 px-3">
-                          {asset.vendor ? (
-                            <span className="inline-block px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-100 text-slate-700 border border-slate-200">
-                              {asset.vendor}
-                            </span>
-                          ) : (
-                            <span className="text-slate-300">—</span>
-                          )}
+                          {(() => {
+                            const meta = extractSourceAndImageId(asset.selectedImage || '');
+                            const displaySource = asset.source || meta.source;
+                            if (displaySource && displaySource !== '—') {
+                              const isDual = displaySource.includes('/');
+                              return (
+                                <span
+                                  className={`inline-block px-2 py-0.5 rounded-md text-[11px] font-medium border ${
+                                    isDual
+                                      ? 'bg-amber-50 text-amber-900 border-amber-200 font-semibold'
+                                      : 'bg-slate-100 text-slate-700 border-slate-200'
+                                  }`}
+                                  title={isDual ? 'Numeric image ID without explicit source: Shutterstock or Getty' : displaySource}
+                                >
+                                  {displaySource}
+                                </span>
+                              );
+                            }
+                            return <span className="text-slate-300">—</span>;
+                          })()}
                         </td>
 
-                        {/* 6. Raw Comment on that page */}
-                        <td className="py-2.5 px-4 min-w-[190px] max-w-[280px]">
-                          {isEditing ? (
-                            <input
-                              type="text"
-                              value={editComment}
-                              onChange={(e) => setEditComment(e.target.value)}
-                              placeholder="Raw comment"
-                              className="w-full px-2 py-1 bg-white border border-blue-400 rounded text-xs font-sans focus:outline-blue-600"
-                            />
-                          ) : asset.comments && asset.comments.length > 0 ? (
-                            <div className="flex items-center gap-1.5 group">
-                              <div className="min-w-0 flex-1">
-                                <span
-                                  className="text-xs text-slate-700 bg-slate-50 border border-slate-200/80 px-2 py-0.5 rounded block truncate select-all font-mono"
-                                  title={asset.comments.map(c => c.content).join(' | ')}
-                                >
-                                  {asset.comments.map(c => c.content).join(' | ')}
-                                </span>
-                              </div>
-                              <button
-                                onClick={() => copyToClipboard(asset.comments.map(c => c.content).join(' | '), 'Copied raw comment')}
-                                className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer transition-opacity shrink-0"
-                                title="Copy raw comment"
-                              >
-                                <Copy className="w-3 h-3" />
-                              </button>
-                            </div>
-                          ) : (
-                            <span className="text-slate-300 italic text-xs">—</span>
-                          )}
+                        {/* 6. Image ID */}
+                        <td className="py-2.5 px-3 font-mono">
+                          {(() => {
+                            const meta = extractSourceAndImageId(asset.selectedImage || '');
+                            const displayImageId = asset.imageId || meta.imageId;
+                            if (displayImageId && displayImageId !== '—') {
+                              return (
+                                <div className="flex items-center gap-1 group">
+                                  <span className="font-semibold text-slate-800">{displayImageId}</span>
+                                  <button
+                                    onClick={() => copyToClipboard(displayImageId, `Copied Image ID ${displayImageId}`)}
+                                    className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer transition-opacity shrink-0"
+                                    title="Copy Image ID"
+                                  >
+                                    <Copy className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              );
+                            }
+                            return <span className="text-slate-300">—</span>;
+                          })()}
                         </td>
 
                         {/* 7. Extracted Image & Saved Name */}
@@ -1253,22 +1614,48 @@ export const CsExtractor: React.FC = () => {
 
                         {/* 8. Status */}
                         <td className="py-2.5 px-3 text-center">
-                          {asset.status === 'Selected' ? (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                              <CheckCircle2 className="w-3 h-3" />
-                              <span>Selected</span>
-                            </span>
-                          ) : asset.status === 'Multiple Selections' ? (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-                              <Info className="w-3 h-3" />
-                              <span>Multiple</span>
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-                              <AlertTriangle className="w-3 h-3" />
-                              <span>Missing</span>
-                            </span>
-                          )}
+                          <div className="flex flex-col items-center gap-1">
+                            {asset.status === 'Selected' ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                <CheckCircle2 className="w-3 h-3" />
+                                <span>Selected</span>
+                              </span>
+                            ) : asset.status === 'Multiple Selections' ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                                <Info className="w-3 h-3" />
+                                <span>Multiple</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                                <AlertTriangle className="w-3 h-3" />
+                                <span>Missing</span>
+                              </span>
+                            )}
+
+                            {/* Flags */}
+                            {asset.hasClippedExtension && (
+                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                <Scissors className="w-2.5 h-2.5" />
+                                <span>Clipped .ext</span>
+                              </span>
+                            )}
+                            {asset.hasHeaderComment ? (
+                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300" title={asset.additionalCommentReason}>
+                                <MessageSquare className="w-2.5 h-2.5 text-amber-700" />
+                                <span>Header note</span>
+                              </span>
+                            ) : asset.isTwoCommentsDifferentPlaces ? (
+                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-purple-50 text-purple-800 border border-purple-200" title={asset.additionalCommentReason}>
+                                <MessageSquare className="w-2.5 h-2.5 text-purple-600" />
+                                <span>2 places</span>
+                              </span>
+                            ) : asset.hasAdditionalComments ? (
+                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200" title={asset.additionalCommentReason}>
+                                <MessageSquare className="w-2.5 h-2.5" />
+                                <span>Extra note</span>
+                              </span>
+                            ) : null}
+                          </div>
                         </td>
 
                         {/* 9. Options count & view */}
@@ -1455,24 +1842,133 @@ export const CsExtractor: React.FC = () => {
 
             {/* Modal Content */}
             <div className="p-5 overflow-y-auto space-y-4">
-              {/* Current Selection & Reviewer Comment */}
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-1.5">
-                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Current Selection:</div>
-                <div className="font-mono text-sm font-bold text-slate-900 flex items-center justify-between">
-                  <span>{inspectingAsset.selectedImage || '(None selected yet)'}</span>
-                  {inspectingAsset.selectedImage && (
-                    <span className="text-xs font-sans font-normal px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded">
-                      Active
-                    </span>
-                  )}
+              {/* Clipped Extension Warning & Fix banner */}
+              {inspectingAsset.hasClippedExtension && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex flex-wrap items-center justify-between gap-2.5 text-xs animate-fade-in">
+                  <div className="flex items-center gap-2">
+                    <Scissors className="w-4 h-4 text-rose-600 shrink-0" />
+                    <div>
+                      <span className="font-bold text-rose-900">Truncated/Clipped Filename Detected:</span>
+                      <p className="text-rose-700 text-[11px] mt-0.5">
+                        The filename on page {inspectingAsset.pageDisplay} is missing its file extension (e.g. .jpg).
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={() => {
+                        handleAppendExtension(inspectingAsset.id, '.jpg');
+                        setInspectingAsset(prev => prev ? ({
+                          ...prev,
+                          selectedImage: prev.selectedImage ? `${prev.selectedImage}.jpg` : '',
+                          hasClippedExtension: false,
+                        }) : null);
+                      }}
+                      className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded text-xs cursor-pointer shadow-2xs transition-colors"
+                      title="Append .jpg extension"
+                    >
+                      + Append .jpg
+                    </button>
+                  </div>
                 </div>
-                {inspectingAsset.comments.length > 0 && (
-                  <div className="pt-1 text-xs text-slate-600 border-t border-slate-200 mt-1">
-                    <span className="font-semibold text-slate-700">Reviewer Note / Comment: </span>
-                    <span className="italic font-mono">{inspectingAsset.comments.map(c => c.content).join('; ')}</span>
-                    {inspectingAsset.comments[0].author && (
-                      <span className="text-slate-400"> (by {inspectingAsset.comments[0].author})</span>
+              )}
+
+              {/* Current Selection & Reviewer Comments */}
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-2.5">
+                <div>
+                  <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Current Selection:</div>
+                  <div className="font-mono text-sm font-bold text-slate-900 flex items-center justify-between mt-1">
+                    <span className={inspectingAsset.hasClippedExtension ? 'text-rose-900' : ''}>
+                      {inspectingAsset.selectedImage || '(None selected yet)'}
+                    </span>
+                    {inspectingAsset.selectedImage && (
+                      <span className="text-xs font-sans font-normal px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded">
+                        Active
+                      </span>
                     )}
+                  </div>
+                </div>
+
+                {/* Source & Image ID */}
+                {inspectingAsset.selectedImage && (() => {
+                  const meta = extractSourceAndImageId(inspectingAsset.selectedImage);
+                  const src = inspectingAsset.source || meta.source;
+                  const imgId = inspectingAsset.imageId || meta.imageId;
+                  return (
+                    <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-200 text-xs">
+                      <div>
+                        <span className="text-slate-500 font-semibold uppercase text-[10px] block">Source</span>
+                        <span className="font-medium text-slate-800">{src}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 font-semibold uppercase text-[10px] block">Image ID</span>
+                        <span className="font-mono font-bold text-slate-800">{imgId}</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Primary Comment */}
+                {inspectingAsset.comments.length > 0 && (
+                  <div className="pt-2 text-xs text-slate-700 border-t border-slate-200">
+                    <div className="font-semibold text-slate-800 mb-0.5 flex items-center justify-between gap-1.5 flex-wrap">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-slate-900">Primary Selection Comment:</span>
+                        {inspectingAsset.comments[0].author && (
+                          <span className="text-slate-400 font-normal">(by {inspectingAsset.comments[0].author})</span>
+                        )}
+                      </div>
+                      <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                        {inspectingAsset.comments[0].locationDescription || (inspectingAsset.comments[0].subtype === 'Square' ? 'Rectangle around candidate image' : 'Image grid')}
+                      </span>
+                    </div>
+                    <div className="p-2 bg-white rounded border border-slate-200 font-mono text-xs select-all">
+                      {inspectingAsset.selectionCommentText || inspectingAsset.comments[0].content}
+                    </div>
+                  </div>
+                )}
+
+                {/* Additional Page Comments / 2 Comments on Page */}
+                {(inspectingAsset.hasTwoCommentsOnPage || inspectingAsset.hasAdditionalComments) && (
+                  <div className="pt-2.5 text-xs border-t border-amber-200/70 space-y-2">
+                    <div className="font-semibold text-amber-950 flex items-center justify-between gap-1.5 flex-wrap">
+                      <div className="flex items-center gap-1.5">
+                        <MessageSquare className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span className="font-bold">2 Comments on Page — Flagged for Review:</span>
+                      </div>
+                      <span className="px-2 py-0.5 rounded bg-amber-200 text-amber-950 font-bold text-[11px] border border-amber-300">
+                        2 Comments
+                      </span>
+                    </div>
+
+                    {/* Detection diagnosis reason */}
+                    {inspectingAsset.additionalCommentReason && (
+                      <div className="p-2 bg-amber-100/70 border border-amber-200 rounded text-[11px] text-amber-900">
+                        <strong>Review Note:</strong> {inspectingAsset.additionalCommentReason}
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      {(inspectingAsset.additionalComments && inspectingAsset.additionalComments.length > 0 
+                        ? inspectingAsset.additionalComments 
+                        : inspectingAsset.comments.slice(1)
+                      ).map((cmt, cIdx) => (
+                        <div key={cIdx} className="p-2.5 bg-amber-50 rounded-lg border border-amber-200 font-sans text-xs text-amber-950 space-y-1">
+                          <div className="flex items-center justify-between text-[11px] text-amber-800">
+                            <span className="font-semibold flex items-center gap-1.5">
+                              <span>Comment #{cIdx + 2}</span>
+                              {cmt.locationDescription && (
+                                <span className="text-slate-500 font-normal">({cmt.locationDescription})</span>
+                              )}
+                            </span>
+                            {cmt.author && <span className="text-slate-500">by {cmt.author}</span>}
+                          </div>
+                          <p className="font-mono text-xs bg-white/80 p-1.5 rounded border border-amber-200/60 select-all">
+                            {cmt.content}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>

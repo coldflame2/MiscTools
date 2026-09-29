@@ -95,16 +95,20 @@ export const DataHealthModal: React.FC<DataHealthModalProps> = ({
         if (dataValidationFlags.length === 0) return;
 
         const { groupedReasons, individualReasons } = groupValidationFlags(dataValidationFlags);
-        let textToCopy = "Data Validation Issues:\n\n";
+        let textToCopy = "Data Validation Issues & Warnings:\n\n";
     
         groupedReasons.forEach((flags, reason) => {
-            textToCopy += `${reason}\n\n`;
+            const cleanReason = reason.startsWith('[WARNING]') ? reason.replace('[WARNING] ', '').replace('[WARNING]', '') : reason;
+            const prefix = reason.startsWith('[WARNING]') ? "[WARNING] " : "";
+            textToCopy += `${prefix}${cleanReason}\n\n`;
         });
 
         individualReasons.forEach(({item, reasons}) => {
             textToCopy += `Row ${item.originalRowIndex + 1} (Page: ${item.pageNumber || 'N/A'})\n`;
             reasons.forEach(reason => {
-                 textToCopy += `- ${reason}\n`;
+                 const cleanReason = reason.startsWith('[WARNING]') ? reason.replace('[WARNING] ', '').replace('[WARNING]', '') : reason;
+                 const prefix = reason.startsWith('[WARNING]') ? "- [WARNING] " : "- ";
+                 textToCopy += `${prefix}${cleanReason}\n`;
             });
             textToCopy += '\n';
         });
@@ -120,53 +124,98 @@ export const DataHealthModal: React.FC<DataHealthModalProps> = ({
 
     const renderDataValidationSection = () => {
         if (dataValidationFlags.length > 0) {
-            const { groupedReasons, individualReasons } = groupValidationFlags(dataValidationFlags);
+            // Partition flags into errors vs warning-only flags
+            const errorFlags = dataValidationFlags.filter(flag => {
+                const reasons = flag.reason.split('|||');
+                return reasons.some(r => !r.startsWith('[WARNING]'));
+            });
+
+            const warningFlags = dataValidationFlags.filter(flag => {
+                const reasons = flag.reason.split('|||');
+                return reasons.every(r => r.startsWith('[WARNING]'));
+            });
+
+            const renderIssueList = (flagsList: AIFlaggedRecord[], isWarning: boolean) => {
+                if (flagsList.length === 0) return null;
+                const { groupedReasons, individualReasons } = groupValidationFlags(flagsList);
+
+                const textHeaderClass = isWarning ? 'text-amber-800' : 'text-red-800';
+                const textSubClass = isWarning ? 'text-amber-700' : 'text-red-700';
+                const listTextClass = isWarning ? 'text-amber-600' : 'text-red-600';
+                const rowLabelClass = isWarning ? 'text-amber-900' : 'text-red-900';
+                const reasonTextClass = isWarning ? 'text-amber-800' : 'text-red-800';
+
+                return (
+                    <div className={`p-4 rounded-lg border ${isWarning ? 'bg-amber-50 border-amber-200' : 'bg-red-50 border-red-200'}`}>
+                        <div className="flex justify-between items-center">
+                            <h4 className={`font-semibold ${textHeaderClass} flex items-center gap-2`}>
+                                {isWarning ? (
+                                    <div className="w-5 h-5 rounded-full bg-amber-500 flex items-center justify-center text-white text-xs font-bold shrink-0">!</div>
+                                ) : (
+                                    <ErrorIcon className="w-5 h-5"/>
+                                )}
+                                <span>{isWarning ? 'Concerning Anomalies / Warnings (Non-Critical)' : 'Data Validation Errors Found'}</span>
+                            </h4>
+                        </div>
+
+                        <p className={`${textSubClass} mt-2`}>
+                            {isWarning 
+                                ? 'The following entries are flagged as concerning but are not strict errors:' 
+                                : 'The following entries violate strict data validation rules:'}
+                        </p>
+                        <ul className={`mt-2 ${listTextClass} max-h-96 overflow-y-auto space-y-2`}>
+                            {Array.from(groupedReasons.keys()).map((reason, i) => {
+                                const cleanReason = reason.startsWith('[WARNING]') ? reason.replace('[WARNING] ', '').replace('[WARNING]', '') : reason;
+                                return (
+                                    <li key={`group-${i}`}>
+                                        <em className={reasonTextClass}>{cleanReason}</em>
+                                    </li>
+                                );
+                            })}
+                            {individualReasons.map(({item, reasons}, i) => (
+                                 <li key={`individual-${i}`}>
+                                    <strong className={rowLabelClass}>Row {item.originalRowIndex + 1}</strong> (Page: {item.pageNumber || 'N/A'})
+                                    <ul className="list-disc list-inside mt-1 pl-4 space-y-0.5">
+                                        {reasons.map((reason, j) => {
+                                            const cleanReason = reason.startsWith('[WARNING]') ? reason.replace('[WARNING] ', '').replace('[WARNING]', '') : reason;
+                                            return (
+                                                <li key={j}>
+                                                    <em className={reasonTextClass}>{cleanReason}</em>
+                                                </li>
+                                            );
+                                        })}
+                                    </ul>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                );
+            };
 
             return (
-                <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
-                    <div className="flex justify-between items-center">
-                        <h4 className="font-semibold text-red-800 flex items-center gap-2">
-                            <ErrorIcon className="w-5 h-5"/> Data Validation Issues Found
-                        </h4>
+                <div className="space-y-4">
+                    <div className="flex justify-end">
                         <button
                             onClick={handleCopyValidationIssues}
-                            title="Copy validation issues"
+                            title="Copy all validation issues"
                             className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold text-slate-600 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition-colors shadow-sm"
                         >
                             {copyValidationStatus === 'copied' ? (
                                 <>
                                     <SuccessIcon className="w-4 h-4 text-green-600" />
-                                    <span>Copied</span>
+                                    <span>Copied All</span>
                                 </>
                             ) : (
                                 <>
                                     <CopyIcon className="w-4 h-4" />
-                                    <span>Copy</span>
+                                    <span>Copy All Issues</span>
                                 </>
                             )}
                         </button>
                     </div>
 
-                    <p className="text-red-700 mt-2">The following entries violate predefined data rules:</p>
-                    <ul className="mt-2 text-red-600 max-h-96 overflow-y-auto space-y-2">
-                        {Array.from(groupedReasons.keys()).map((reason, i) => (
-                            <li key={`group-${i}`}>
-                                <em className="text-red-800">{reason}</em>
-                            </li>
-                         ))}
-                        {individualReasons.map(({item, reasons}, i) => (
-                             <li key={`individual-${i}`}>
-                                <strong className="text-red-900">Row {item.originalRowIndex + 1}</strong> (Page: {item.pageNumber || 'N/A'})
-                                <ul className="list-disc list-inside mt-1 pl-4 space-y-0.5">
-                                    {reasons.map((reason, j) => (
-                                        <li key={j}>
-                                            <em className="text-red-800">{reason}</em>
-                                        </li>
-                                    ))}
-                                </ul>
-                            </li>
-                        ))}
-                    </ul>
+                    {renderIssueList(errorFlags, false)}
+                    {renderIssueList(warningFlags, true)}
                 </div>
             );
         }

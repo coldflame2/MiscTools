@@ -15,6 +15,9 @@ export interface ExtractedComment {
   rect?: number[];
   subtype?: string;
   date?: string;
+  cx?: number;
+  cy?: number;
+  locationDescription?: string;
 }
 
 export interface DetectedPdfImage {
@@ -60,6 +63,8 @@ export interface AssetRecord {
   pageDisplay: string;
   selectedPageNum: number;
   selectedImage: string;
+  source?: string;
+  imageId?: string;
   status: 'Selected' | 'Missing Selection' | 'Multiple Selections';
   comments: ExtractedComment[];
   candidateOptions: string[];
@@ -67,6 +72,183 @@ export interface AssetRecord {
   userEdited?: boolean;
   notes?: string;
   extractedImage?: ExtractedImageInfo;
+
+  // Review & Separation flags
+  hasTwoCommentsOnPage?: boolean;
+  hasAdditionalComments: boolean;
+  additionalComments: ExtractedComment[];
+  selectionCommentText?: string;
+  additionalCommentsText?: string;
+  additionalCommentReason?: string;
+  isTwoCommentsDifferentPlaces?: boolean;
+  hasHeaderComment?: boolean;
+  hasClippedExtension: boolean;
+  clippedSuggestedOption?: string;
+}
+
+/**
+ * Common image file extensions in photo research and publishing (case-insensitive)
+ */
+export const VALID_IMAGE_EXTENSIONS_REGEX = /\.(jpe?g|png|webp|tif|tiff|eps|gif|svg|bmp)$/i;
+
+/**
+ * Checks if a filename has a recognized image file extension (e.g. .jpg, .png, etc.)
+ */
+export function hasValidImageExtension(fileName: string): boolean {
+  if (!fileName || typeof fileName !== 'string') return false;
+  return VALID_IMAGE_EXTENSIONS_REGEX.test(fileName.trim());
+}
+
+export interface ClassifiedCommentsResult {
+  winningComment?: ExtractedComment;
+  selectedImage: string;
+  status: 'Selected' | 'Missing Selection' | 'Multiple Selections';
+  hasAdditionalComments: boolean;
+  additionalComments: ExtractedComment[];
+  selectionCommentText: string;
+  additionalCommentsText?: string;
+  additionalCommentReason?: string;
+  hasTwoCommentsOnPage: boolean;
+  isTwoCommentsDifferentPlaces?: boolean;
+  hasHeaderComment?: boolean;
+  hasClippedExtension: boolean;
+  clippedSuggestedOption?: string;
+}
+
+/**
+ * Classifies comments for an asset:
+ * 1. Uses the comment with a valid image file extension (.jpg, .png, etc.) as the main selection if it exists.
+ * 2. Flags pages that have 2 or more comments on the same page for review.
+ * 3. Never treats single image selection comments as editorial notes.
+ */
+export function classifyAssetComments(
+  comments: ExtractedComment[],
+  candidateOptions: string[]
+): ClassifiedCommentsResult {
+  if (!comments || comments.length === 0) {
+    return {
+      selectedImage: '',
+      status: 'Missing Selection',
+      hasAdditionalComments: false,
+      additionalComments: [],
+      selectionCommentText: '',
+      hasTwoCommentsOnPage: false,
+      hasClippedExtension: false
+    };
+  }
+
+  // 1. Identify main comment: prioritize comment that has a valid image file extension
+  const commentsWithExt = comments.filter(c => hasValidImageExtension(c.content));
+
+  let winningComment: ExtractedComment;
+
+  if (commentsWithExt.length > 0) {
+    // If one or more comments have a file extension (.jpg, etc.)
+    if (commentsWithExt.length === 1) {
+      winningComment = commentsWithExt[0];
+    } else {
+      // Multiple comments have file extensions: check if one matches page candidates
+      const matchingCandidate = commentsWithExt.find(c => {
+        const lower = c.content.toLowerCase();
+        return candidateOptions.some(opt => opt.toLowerCase().includes(lower) || lower.includes(opt.toLowerCase()));
+      });
+      winningComment = matchingCandidate || commentsWithExt[0];
+    }
+  } else {
+    // No comment has an extension: check if any comment matches candidate options on the page
+    const matchingCandidate = comments.find(c => {
+      const lower = c.content.toLowerCase();
+      return candidateOptions.some(opt => {
+        const oLower = opt.toLowerCase();
+        const stemLower = oLower.replace(/\.[^/.]+$/, '');
+        return oLower.includes(lower) || lower.includes(oLower) || (stemLower.length >= 6 && lower.includes(stemLower));
+      });
+    });
+    winningComment = matchingCandidate || comments[0];
+  }
+
+  // Extract clean selected filename
+  const rawSelectedName = cleanImageFileName(winningComment.content);
+  let selectedImage = rawSelectedName;
+
+  // Correlate with candidate options on the page to retrieve the fullest filename if available
+  if (candidateOptions.length > 0) {
+    const matched = candidateOptions.find(opt => {
+      const optLower = opt.toLowerCase();
+      const rawLower = rawSelectedName.toLowerCase();
+      const stemLower = rawLower.replace(/\.[^/.]+$/, '');
+      return optLower.includes(rawLower) || rawLower.includes(optLower) ||
+        (stemLower.length >= 6 && optLower.includes(stemLower));
+    });
+    if (matched && matched.length >= selectedImage.length) {
+      selectedImage = matched;
+    }
+  }
+
+  // Check if filename is clipped (no image file extension)
+  const hasClipped = Boolean(selectedImage && !hasValidImageExtension(selectedImage));
+  let clippedSuggestedOption: string | undefined;
+  if (hasClipped && candidateOptions.length > 0) {
+    const match = candidateOptions.find(opt =>
+      hasValidImageExtension(opt) &&
+      (opt.toLowerCase().startsWith(selectedImage.toLowerCase()) ||
+       selectedImage.toLowerCase().startsWith(opt.replace(/\.[^/.]+$/, '').toLowerCase()))
+    );
+    if (match) {
+      clippedSuggestedOption = match;
+    }
+  }
+
+  // 2. Evaluate remaining comments & flag 2 comments on the same page
+  const remaining = comments.filter(c => c.id !== winningComment.id);
+  const hasTwoCommentsOnPage = comments.length >= 2;
+
+  // If there are 0 remaining comments, it's a single clean comment:
+  if (remaining.length === 0) {
+    return {
+      winningComment,
+      selectedImage,
+      status: selectedImage ? 'Selected' : 'Missing Selection',
+      hasAdditionalComments: false,
+      additionalComments: [],
+      selectionCommentText: winningComment.content,
+      hasTwoCommentsOnPage: false,
+      hasClippedExtension: hasClipped,
+      clippedSuggestedOption
+    };
+  }
+
+  // If there are multiple comments that BOTH have image file extensions with different names:
+  let status: 'Selected' | 'Missing Selection' | 'Multiple Selections' = 'Selected';
+  if (commentsWithExt.length >= 2) {
+    const uniqueNames = new Set(commentsWithExt.map(c => cleanImageFileName(c.content).toLowerCase()));
+    if (uniqueNames.size > 1) {
+      status = 'Multiple Selections';
+    }
+  }
+
+  const additionalCommentsText = remaining
+    .map(c => `[p. ${c.pageNum}] ${c.content}`)
+    .join(' | ');
+
+  const additionalCommentReason = status === 'Multiple Selections'
+    ? `Multiple conflicting selections on page: "${winningComment.content}" vs "${remaining[0].content}"`
+    : `2 comments on page: Primary "${winningComment.content}" | Note "${remaining[0].content}"`;
+
+  return {
+    winningComment,
+    selectedImage,
+    status,
+    hasAdditionalComments: true,
+    additionalComments: remaining,
+    selectionCommentText: winningComment.content,
+    additionalCommentsText,
+    additionalCommentReason,
+    hasTwoCommentsOnPage: true,
+    isTwoCommentsDifferentPlaces: true,
+    hasClippedExtension: hasClipped,
+    clippedSuggestedOption
+  };
 }
 
 export interface ExtractionProgress {
@@ -87,6 +269,9 @@ export interface ExtractionResult {
     totalSelected: number;
     totalMissing: number;
     totalMultiPage: number;
+    totalWithAdditionalComments: number;
+    totalWithClippedExtension: number;
+    totalNeedsReview: number;
   };
 }
 
@@ -330,21 +515,115 @@ function multiplyTransformMatrix(m1: number[], m2: number[]): number[] {
   ];
 }
 
+export interface SourceAndImageId {
+  source: string;
+  imageId: string;
+}
+
+/**
+ * Extracts Source (Vendor) and Image ID from a filename or selection string.
+ *
+ * Rules:
+ * 1. Recognizes known agencies: Shutterstock, Getty Images, iStock, Alamy, Adobe Stock, GOBY, Dreamstime, Depositphotos, 123RF.
+ * 2. If no source is present and image ID is numeric (e.g. "2167493181.jpg", "14283921"), source is "Shutterstock / Getty".
+ * 3. Extracts the specific numerical or alphanumeric ID (e.g. Shutterstock_RF_2167493181.jpg -> 2167493181).
+ */
+export function extractSourceAndImageId(fileNameOrText: string): SourceAndImageId {
+  if (!fileNameOrText) {
+    return { source: '—', imageId: '—' };
+  }
+
+  const raw = fileNameOrText.trim();
+  if (!raw || raw === '—' || raw.toLowerCase() === '(none)') {
+    return { source: '—', imageId: '—' };
+  }
+
+  // Strip file extension (.jpg, .jpeg, .png, etc.)
+  const stem = raw.replace(/\.[^/.]+$/, '').trim();
+  const lower = raw.toLowerCase();
+
+  // 1. Detect Source
+  let source = '';
+  if (lower.includes('shutterstock')) {
+    source = 'Shutterstock';
+  } else if (lower.includes('getty')) {
+    source = 'Getty Images';
+  } else if (lower.includes('istock')) {
+    source = 'iStock';
+  } else if (lower.includes('alamy')) {
+    source = 'Alamy';
+  } else if (lower.includes('goby')) {
+    source = 'GOBY / Shutterstock';
+  } else if (lower.includes('adobe')) {
+    source = 'Adobe Stock';
+  } else if (lower.includes('dreamstime')) {
+    source = 'Dreamstime';
+  } else if (lower.includes('depositphotos')) {
+    source = 'Depositphotos';
+  } else if (lower.includes('123rf')) {
+    source = '123RF';
+  }
+
+  // 2. Extract Image ID
+  let imageId = '';
+
+  // Clean numeric stem by removing leading/trailing punctuation or license tokens like _rf, _rm
+  const cleanNumericCandidate = stem
+    .replace(/^(?:#|[_-])+/g, '')
+    .replace(/(?:[_-](?:rf|rm|creative|editorial))+$/i, '')
+    .trim();
+
+  if (/^\d+$/.test(cleanNumericCandidate)) {
+    imageId = cleanNumericCandidate;
+  } else {
+    // Look for explicit numeric sequences (e.g., 5 to 12 digits) commonly used by stock agencies
+    const digitMatch = stem.match(/\b\d{5,12}\b/) || stem.match(/(?:_|-|id|#)(\d{5,12})(?:_|-|\b)/i) || stem.match(/(\d{5,12})/);
+    if (digitMatch) {
+      imageId = digitMatch[1] || digitMatch[0];
+    } else if (source === 'Alamy') {
+      // Alamy alphanumeric ID (e.g. Alamy_2D9A4B1 or Alamy_F4X7Y2)
+      const alamyMatch = stem.match(/alamy[_ \-]+([A-Za-z0-9]{5,10})/i);
+      if (alamyMatch) {
+        imageId = alamyMatch[1];
+      }
+    }
+
+    // If still no imageId, check if stripping vendor and licensing prefixes yields an ID
+    if (!imageId && source) {
+      const withoutVendor = stem
+        .replace(/(?:shutterstock(?:_rf|_rm)?|getty(?:images)?(?:_rf|_rm)?|istock(?:photo)?|alamy|adobestock|adobe_stock|dreamstime|depositphotos|123rf|goby)[_ \-]+/i, '')
+        .replace(/^(?:rf|rm|creative|editorial)[_ \-]+/i, '')
+        .trim();
+      if (withoutVendor && withoutVendor !== stem) {
+        imageId = withoutVendor;
+      }
+    }
+  }
+
+  // 3. User Rule:
+  // "if no source is there, and image id is just numeric, it is either shutterstock or getty. Provide both as source separated by slash"
+  const isNumericId = Boolean(imageId && /^\d+$/.test(imageId));
+  if (!source) {
+    if (isNumericId) {
+      source = 'Shutterstock / Getty';
+    } else {
+      source = '—';
+    }
+  }
+
+  if (!imageId) {
+    imageId = '—';
+  }
+
+  return { source, imageId };
+}
+
 /**
  * Detect image vendor from filename or text
  */
 export function detectVendor(fileName: string): string {
-  const lower = fileName.toLowerCase();
-  if (lower.includes('shutterstock')) return 'Shutterstock';
-  if (lower.includes('getty')) return 'Getty Images';
-  if (lower.includes('alamy')) return 'Alamy';
-  if (lower.includes('istock')) return 'iStock';
-  if (lower.includes('goby')) return 'GOBY / Shutterstock';
-  if (lower.includes('adobe')) return 'Adobe Stock';
-  if (lower.includes('dreamstime')) return 'Dreamstime';
-  if (lower.includes('depositphotos')) return 'Depositphotos';
-  if (lower.includes('123rf')) return '123RF';
-  return 'Direct / Agency';
+  const { source } = extractSourceAndImageId(fileName);
+  return source;
 }
 
 /**
@@ -492,36 +771,120 @@ export async function extractContactSheetPdf(
         }
       }
 
-      // 2. Extract annotations (Comments, Sticky notes, FreeText, Popups)
+      // 2. Extract annotations (Comments, Rectangles, Sticky notes, FreeText, Popups)
       const annotations = await page.getAnnotations();
-      const comments: ExtractedComment[] = [];
-      const seenComments = new Set<string>();
+      
+      // Separate markup annotations from popup notes
+      const markupAnnots: any[] = [];
+      const popupAnnots: any[] = [];
 
       for (const annot of annotations) {
-        // Skip invisible or widget annotations
-        if (annot.subtype === 'Link' || annot.subtype === 'Widget') continue;
+        if (!annot || annot.subtype === 'Link' || annot.subtype === 'Widget') continue;
+        if (annot.subtype === 'Popup') {
+          popupAnnots.push(annot);
+        } else {
+          markupAnnots.push(annot);
+        }
+      }
 
-        // Contents can be on contents, contentsObj.str, richText, etc.
-        let textContentStr = '';
-        if (typeof annot.contents === 'string' && annot.contents.trim()) {
-          textContentStr = annot.contents.trim();
-        } else if (annot.contentsObj && typeof annot.contentsObj.str === 'string') {
-          textContentStr = annot.contentsObj.str.trim();
+      // If a markup annotation has empty or short contents, resolve text from its associated popup bubble
+      for (const markup of markupAnnots) {
+        let text = '';
+        if (typeof markup.contents === 'string' && markup.contents.trim()) {
+          text = markup.contents.trim();
+        } else if (markup.contentsObj && typeof markup.contentsObj.str === 'string') {
+          text = markup.contentsObj.str.trim();
         }
 
-        // Avoid popup duplicates if the content and author match a Text annotation already recorded
-        const commentKey = `${textContentStr}_${annot.author || ''}_${annot.rect ? Math.round(annot.rect[0]) : ''}`;
-        if (textContentStr && !seenComments.has(commentKey)) {
-          seenComments.add(commentKey);
-          comments.push({
-            id: annot.id || `annot-${pageNum}-${comments.length + 1}`,
-            content: textContentStr,
-            author: annot.titleObj?.str || annot.title || undefined,
-            rect: annot.rect,
-            subtype: annot.subtype,
-            date: annot.modificationDate || undefined
+        if (!text) {
+          const relatedPopup = popupAnnots.find(p => 
+            p.parentId === markup.id || 
+            p.inReplyTo === markup.id || 
+            (p.rect && markup.rect && Math.abs(p.rect[0] - markup.rect[0]) < 50 && Math.abs(p.rect[1] - markup.rect[1]) < 50)
+          );
+          if (relatedPopup) {
+            const pText = typeof relatedPopup.contents === 'string'
+              ? relatedPopup.contents.trim()
+              : (relatedPopup.contentsObj?.str?.trim() || '');
+            if (pText) {
+              text = pText;
+            }
+          }
+        }
+        markup._resolvedText = text;
+      }
+
+      const rawExtracted: {
+        id: string;
+        content: string;
+        author?: string;
+        rect?: number[];
+        subtype?: string;
+        date?: string;
+      }[] = [];
+
+      for (const markup of markupAnnots) {
+        if (markup._resolvedText) {
+          rawExtracted.push({
+            id: markup.id || `annot-${pageNum}-${rawExtracted.length + 1}`,
+            content: markup._resolvedText,
+            author: markup.titleObj?.str || markup.title || undefined,
+            rect: markup.rect,
+            subtype: markup.subtype,
+            date: markup.modificationDate || undefined
           });
         }
+      }
+
+      // Also include standalone popups that have non-empty text not already present in markup annotations
+      for (const popup of popupAnnots) {
+        if (popup.parentId || popup.inReplyTo) continue;
+        const pText = typeof popup.contents === 'string' ? popup.contents.trim() : (popup.contentsObj?.str?.trim() || '');
+        if (pText && !rawExtracted.some(m => m.content.toLowerCase() === pText.toLowerCase())) {
+          rawExtracted.push({
+            id: popup.id || `popup-${pageNum}-${rawExtracted.length + 1}`,
+            content: pText,
+            author: popup.titleObj?.str || popup.title || undefined,
+            rect: popup.rect,
+            subtype: 'Popup',
+            date: popup.modificationDate || undefined
+          });
+        }
+      }
+
+      // Calculate spatial positions and deduplicate identical text on the same page
+      const comments: ExtractedComment[] = [];
+      const seenCommentTexts = new Set<string>();
+
+      for (const item of rawExtracted) {
+        const norm = item.content.toLowerCase().replace(/[\r\n\s]+/g, ' ').trim();
+        if (!norm || seenCommentTexts.has(norm)) continue;
+        seenCommentTexts.add(norm);
+
+        let cx = 0;
+        let cy = 0;
+
+        if (item.rect && item.rect.length === 4) {
+          cx = (item.rect[0] + item.rect[2]) / 2;
+          cy = (item.rect[1] + item.rect[3]) / 2;
+        }
+
+        const locationDescription = item.subtype === 'Square'
+          ? 'Rectangle around candidate image'
+          : 'Page comment';
+
+        comments.push({
+          id: item.id,
+          pageNum,
+          content: item.content,
+          author: item.author,
+          rect: item.rect,
+          subtype: item.subtype,
+          date: item.date,
+          cx,
+          cy,
+          locationDescription
+        });
       }
 
       // 3. Extract candidate image options / captions on this page
@@ -688,44 +1051,10 @@ export async function extractContactSheetPdf(
 
   // Build final AssetRecord list
   const assets: AssetRecord[] = assetGroups.map((group, idx) => {
-    // Determine selected image
-    let selectedImage = '';
-    let status: AssetRecord['status'] = 'Missing Selection';
-    let winningComment: ExtractedComment | undefined;
-
-    if (group.comments.length === 1) {
-      winningComment = group.comments[0];
-      selectedImage = cleanImageFileName(winningComment.content);
-      status = 'Selected';
-    } else if (group.comments.length > 1) {
-      // Check if one matches candidate options directly
-      const matching = group.comments.find(c => 
-        group.candidateOptions.some(opt => opt.toLowerCase().includes(c.content.toLowerCase()) || c.content.toLowerCase().includes(opt.toLowerCase()))
-      );
-      if (matching) {
-        winningComment = matching;
-        selectedImage = cleanImageFileName(matching.content);
-        status = 'Selected';
-      } else {
-        winningComment = group.comments[0];
-        selectedImage = cleanImageFileName(group.comments[0].content);
-        status = 'Multiple Selections';
-      }
-    }
-
-    // If selectedImage is set, try matching with candidate options to get fullest filename
-    if (selectedImage && group.candidateOptions.length > 0) {
-      const bestCandidate = group.candidateOptions.find(opt => 
-        opt.toLowerCase().includes(selectedImage.toLowerCase()) || 
-        selectedImage.toLowerCase().includes(opt.toLowerCase())
-      );
-      if (bestCandidate && bestCandidate.length > selectedImage.length) {
-        selectedImage = bestCandidate;
-      }
-    }
+    const classified = classifyAssetComments(group.comments, group.candidateOptions);
 
     // Determine the exact page of the selection
-    const selectedPageNum = winningComment?.pageNum || group.pages[0] || 1;
+    const selectedPageNum = classified.winningComment?.pageNum || group.pages[0] || 1;
 
     // Page range display: e.g. "1" or "1-2" or "1, 3"
     let pageDisplay = '';
@@ -740,17 +1069,33 @@ export async function extractContactSheetPdf(
       }
     }
 
+    const meta = extractSourceAndImageId(classified.selectedImage);
+    const source = meta.source !== '—' ? meta.source : undefined;
+    const imageId = meta.imageId !== '—' ? meta.imageId : undefined;
+
     return {
       id: `asset-${idx + 1}-${group.assetCode}`,
       assetCode: group.assetCode,
       pages: group.pages,
       pageDisplay,
       selectedPageNum,
-      selectedImage,
-      status,
+      selectedImage: classified.selectedImage,
+      source,
+      imageId,
+      status: classified.status,
       comments: group.comments,
       candidateOptions: group.candidateOptions,
-      vendor: selectedImage ? detectVendor(selectedImage) : undefined
+      vendor: source,
+      hasTwoCommentsOnPage: classified.hasTwoCommentsOnPage,
+      hasAdditionalComments: classified.hasAdditionalComments,
+      additionalComments: classified.additionalComments,
+      selectionCommentText: classified.selectionCommentText,
+      additionalCommentsText: classified.additionalCommentsText,
+      additionalCommentReason: classified.additionalCommentReason,
+      isTwoCommentsDifferentPlaces: classified.isTwoCommentsDifferentPlaces,
+      hasHeaderComment: classified.hasHeaderComment,
+      hasClippedExtension: classified.hasClippedExtension,
+      clippedSuggestedOption: classified.clippedSuggestedOption
     };
   });
 
@@ -758,12 +1103,17 @@ export async function extractContactSheetPdf(
   const totalSelected = assets.filter(a => a.status === 'Selected' || a.status === 'Multiple Selections').length;
   const totalMissing = assets.filter(a => a.status === 'Missing Selection').length;
   const totalMultiPage = assets.filter(a => a.pages.length > 1).length;
+  const totalWithAdditionalComments = assets.filter(a => a.hasAdditionalComments).length;
+  const totalWithClippedExtension = assets.filter(a => a.hasClippedExtension).length;
+  const totalNeedsReview = assets.filter(a =>
+    a.hasAdditionalComments || a.hasClippedExtension || a.status === 'Missing Selection' || a.status === 'Multiple Selections'
+  ).length;
 
   onProgress?.({
     currentPage: totalPages,
     totalPages,
     phase: 'completed',
-    statusMessage: `Successfully extracted ${totalAssets} assets (${totalSelected} selected, ${totalMissing} missing).`
+    statusMessage: `Successfully extracted ${totalAssets} assets (${totalSelected} selected, ${totalMissing} missing, ${totalNeedsReview} needing review).`
   });
 
   return {
@@ -776,7 +1126,10 @@ export async function extractContactSheetPdf(
       totalAssets,
       totalSelected,
       totalMissing,
-      totalMultiPage
+      totalMultiPage,
+      totalWithAdditionalComments,
+      totalWithClippedExtension,
+      totalNeedsReview
     }
   };
 }
@@ -1234,18 +1587,76 @@ export function generateSample82PageData(): {
         });
       }
 
-      // Add comment if this page contains the selected image
-      if (!isMissingSelection && (pageNum === pagesForAsset[pagesForAsset.length - 1] || Math.random() > 0.5) && comments.length === 0) {
+      // Generate comments based on specific test scenarios
+      if (!isMissingSelection) {
         const selectedOption = pageCandidates[Math.floor(Math.random() * pageCandidates.length)];
         selectedPageNum = pageNum;
+
+        // Special Scenario A: Asset 8 has a secondary editorial note
+        if (assetIndex === 8) {
+          comments.push({
+            id: `sample-header-note-${pageNum}`,
+            pageNum,
+            content: 'Editorial Note: Verify licensing rights with Getty Images before layout',
+            author: 'Art Director',
+            rect: [50, 720, 300, 750],
+            subtype: 'Text',
+            cx: 175,
+            cy: 735,
+            locationDescription: 'Editorial note'
+          });
+        }
+
+        // Special Scenario B: Asset 16 has two comments on page (Selection + Alt option note)
+        if (assetIndex === 16) {
+          const optAlt = pageCandidates[Math.min(pageCandidates.length - 1, 4)];
+          comments.push({
+            id: `sample-annot-alt-${pageNum}`,
+            pageNum,
+            content: 'Alternative selection if author prefers horizontal orientation',
+            author: 'Photo Editor',
+            rect: [optAlt.x, optAlt.y + 40, optAlt.x + 30, optAlt.y + 60],
+            subtype: 'Text',
+            cx: optAlt.x + 15,
+            cy: optAlt.y + 50,
+            locationDescription: 'Alt option note'
+          });
+        }
+
+        // Special Scenario C: Asset 24 has a clipped filename (missing .jpg)
+        let commentText = selectedOption.text;
+        if (assetIndex === 24) {
+          commentText = selectedOption.text.replace(/\.jpe?g$/i, '');
+        }
+
+        // Standard Primary Selection Comment (Rectangle around image)
         comments.push({
-          id: `sample-annot-${pageNum}`,
+          id: `sample-annot-rect-${pageNum}`,
           pageNum,
-          content: selectedOption.text,
+          content: commentText,
           author: 'Editorial Reviewer',
-          rect: [selectedOption.x, selectedOption.y + 20, selectedOption.x + 20, selectedOption.y + 40],
-          subtype: 'Text'
+          rect: [selectedOption.x - 5, selectedOption.y - 5, selectedOption.x + 100, selectedOption.y + 80],
+          subtype: 'Square',
+          cx: selectedOption.x + 47,
+          cy: selectedOption.y + 37,
+          locationDescription: 'Rectangle around candidate image'
         });
+
+        // Special Scenario D: Asset 48 has multiple conflicting selections
+        if (assetIndex === 48 && pageCandidates.length > 2) {
+          const secondOption = pageCandidates[1];
+          comments.push({
+            id: `sample-annot-second-${pageNum}`,
+            pageNum,
+            content: secondOption.text,
+            author: 'Managing Editor',
+            rect: [secondOption.x - 5, secondOption.y - 5, secondOption.x + 100, secondOption.y + 80],
+            subtype: 'Square',
+            cx: secondOption.x + 47,
+            cy: secondOption.y + 37,
+            locationDescription: 'Rectangle around candidate image'
+          });
+        }
       }
 
       rawPages.push({
@@ -1259,8 +1670,9 @@ export function generateSample82PageData(): {
       });
     }
 
-    const selectedImage = comments.length > 0 ? comments[0].content : '';
-    const status: AssetRecord['status'] = isMissingSelection ? 'Missing Selection' : 'Selected';
+    const classified = classifyAssetComments(comments, candidateOptions);
+    const status = classified.status;
+    const selectedImage = classified.selectedImage;
     const pageDisplay = pagesForAsset.length > 1 ? `${pagesForAsset[0]}–${pagesForAsset[1]}` : `${pagesForAsset[0]}`;
     const vendor = selectedImage ? detectVendor(selectedImage) : undefined;
 
@@ -1275,6 +1687,10 @@ export function generateSample82PageData(): {
       );
     }
 
+    const meta = extractSourceAndImageId(selectedImage);
+    const source = meta.source !== '—' ? meta.source : vendor;
+    const imageId = meta.imageId !== '—' ? meta.imageId : undefined;
+
     assets.push({
       id: `sample-asset-${assetIndex}`,
       assetCode,
@@ -1282,11 +1698,23 @@ export function generateSample82PageData(): {
       pageDisplay,
       selectedPageNum,
       selectedImage,
+      source,
+      imageId,
       status,
       comments,
       candidateOptions,
-      vendor,
-      extractedImage
+      vendor: source,
+      extractedImage,
+      hasTwoCommentsOnPage: classified.hasTwoCommentsOnPage,
+      hasAdditionalComments: classified.hasAdditionalComments,
+      additionalComments: classified.additionalComments,
+      selectionCommentText: classified.selectionCommentText,
+      additionalCommentsText: classified.additionalCommentsText,
+      additionalCommentReason: classified.additionalCommentReason,
+      isTwoCommentsDifferentPlaces: classified.isTwoCommentsDifferentPlaces,
+      hasHeaderComment: classified.hasHeaderComment,
+      hasClippedExtension: classified.hasClippedExtension,
+      clippedSuggestedOption: classified.clippedSuggestedOption
     });
 
     currentPage += pagesForAsset.length;
@@ -1297,6 +1725,11 @@ export function generateSample82PageData(): {
   const totalSelected = assets.filter(a => a.status === 'Selected').length;
   const totalMissing = assets.filter(a => a.status === 'Missing Selection').length;
   const totalMultiPage = assets.filter(a => a.pages.length > 1).length;
+  const totalWithAdditionalComments = assets.filter(a => a.hasAdditionalComments).length;
+  const totalWithClippedExtension = assets.filter(a => a.hasClippedExtension).length;
+  const totalNeedsReview = assets.filter(a =>
+    a.hasAdditionalComments || a.hasClippedExtension || a.status === 'Missing Selection' || a.status === 'Multiple Selections'
+  ).length;
 
   return {
     assets,
@@ -1307,7 +1740,10 @@ export function generateSample82PageData(): {
       totalAssets,
       totalSelected,
       totalMissing,
-      totalMultiPage
+      totalMultiPage,
+      totalWithAdditionalComments,
+      totalWithClippedExtension,
+      totalNeedsReview
     }
   };
 }
@@ -1379,30 +1815,77 @@ export async function downloadSingleImage(
 
 /**
  * Format asset rows as TSV for direct paste into Excel.
- * Starting with Page number, then Asset Code, then Selection, then Vendor, and Raw Comment.
+ * Starting with Page number, then Asset Code, Selection, Source, Image ID, Additional Comments, Clipped Flag, and Status.
+ * Note: Raw Comment column is removed per user request as Selection contains the primary filename.
  */
 export function formatAssetsToTsv(assets: AssetRecord[], includeStatus = true): string {
   if (includeStatus) {
-    const header = ['Page', 'Asset Code', 'Selection', 'Vendor', 'Raw Comment', 'Status'].join('\t');
-    const rows = assets.map(a => [
-      a.pageDisplay,
-      a.assetCode,
-      a.selectedImage || '—',
-      a.vendor || '—',
-      a.comments.map(c => c.content).join(' | ') || '—',
-      a.status
-    ].join('\t'));
+    const header = ['Page', 'Asset Code', 'Selection', 'Source', 'Image ID', 'Additional Comments', 'Clipped / Missing Ext?', 'Status'].join('\t');
+    const rows = assets.map(a => {
+      const meta = extractSourceAndImageId(a.selectedImage || a.selectionCommentText || '');
+      const source = a.source || meta.source || '—';
+      const imageId = a.imageId || meta.imageId || '—';
+      return [
+        a.pageDisplay,
+        a.assetCode,
+        a.selectedImage || '—',
+        source,
+        imageId,
+        a.additionalCommentsText || (a.hasTwoCommentsOnPage || a.hasAdditionalComments ? 'Yes' : '—'),
+        a.hasClippedExtension ? 'YES - Missing Extension' : 'OK',
+        a.status
+      ].join('\t');
+    });
     return [header, ...rows].join('\n');
   } else {
-    const header = ['Page', 'Asset Code', 'Selection', 'Vendor', 'Raw Comment'].join('\t');
-    const rows = assets.map(a => [
+    const header = ['Page', 'Asset Code', 'Selection', 'Source', 'Image ID', 'Additional Comments'].join('\t');
+    const rows = assets.map(a => {
+      const meta = extractSourceAndImageId(a.selectedImage || a.selectionCommentText || '');
+      const source = a.source || meta.source || '—';
+      const imageId = a.imageId || meta.imageId || '—';
+      return [
+        a.pageDisplay,
+        a.assetCode,
+        a.selectedImage || '—',
+        source,
+        imageId,
+        a.additionalCommentsText || (a.hasTwoCommentsOnPage || a.hasAdditionalComments ? 'Yes' : '—')
+      ].join('\t');
+    });
+    return [header, ...rows].join('\n');
+  }
+}
+
+/**
+ * Format only review-flagged rows (2 Comments on Page, Clipped Extension, or Missing) as TSV for direct paste into Excel
+ */
+export function formatReviewAssetsToTsv(assets: AssetRecord[]): string {
+  const reviewRows = assets.filter(a => a.hasTwoCommentsOnPage || a.hasAdditionalComments || a.hasClippedExtension || a.status === 'Missing Selection' || a.status === 'Multiple Selections');
+  const header = ['Page', 'Asset Code', 'Selection', 'Source', 'Image ID', 'Flag Reasons', 'Additional Comments', 'Clipped / Missing Ext?', 'Status'].join('\t');
+  const rows = reviewRows.map(a => {
+    const reasons: string[] = [];
+    if (a.hasTwoCommentsOnPage) reasons.push('2 Comments on Page');
+    if (a.additionalCommentReason) reasons.push(a.additionalCommentReason);
+    if (a.hasClippedExtension) reasons.push('Clipped Filename (No Extension)');
+    if (a.status === 'Missing Selection') reasons.push('Missing Selection');
+    if (a.status === 'Multiple Selections') reasons.push('Multiple Selections');
+
+    const meta = extractSourceAndImageId(a.selectedImage || a.selectionCommentText || '');
+    const source = a.source || meta.source || '—';
+    const imageId = a.imageId || meta.imageId || '—';
+
+    return [
       a.pageDisplay,
       a.assetCode,
       a.selectedImage || '—',
-      a.vendor || '—',
-      a.comments.map(c => c.content).join(' | ') || '—'
-    ].join('\t'));
-    return [header, ...rows].join('\n');
-  }
+      source,
+      imageId,
+      reasons.join('; '),
+      a.additionalCommentsText || '—',
+      a.hasClippedExtension ? 'YES - Missing Extension' : 'OK',
+      a.status
+    ].join('\t');
+  });
+  return [header, ...rows].join('\n');
 }
 
