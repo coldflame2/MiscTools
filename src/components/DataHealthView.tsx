@@ -1,11 +1,13 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import type { AIFlaggedRecord, AIAnalysisStatus } from '../types';
+import { VALIDATION_RULES, getRuleIdForReason, getRuleById, getRulesForReasons, type ValidationRuleDef } from '../services/validationRules';
 import { ErrorIcon } from './icons/ErrorIcon';
 import { SuccessIcon } from './icons/SuccessIcon';
 import { SparklesIcon } from './icons/SparklesIcon';
 import { CopyIcon } from './icons/CopyIcon';
+import { CloseIcon } from './icons/CloseIcon';
 import { FileSheetIcon } from './icons/FileSheetIcon';
-import { Check, Search } from 'lucide-react';
+import { Check, Search, SlidersHorizontal, AlertTriangle, XCircle } from 'lucide-react';
 
 interface GroupedValidation {
   groupedReasons: Map<string, AIFlaggedRecord[]>;
@@ -66,6 +68,13 @@ export interface DataHealthViewProps {
   onRunAiAnalysis: () => void;
   originalRecordCount: number;
   onNavigateToLog?: () => void;
+  rawValidationFlags?: AIFlaggedRecord[];
+  enabledRuleIds?: Set<string>;
+  onEnableAllRules?: () => void;
+  onDisableRule?: (ruleId: string) => void;
+  onDisableRules?: (ruleIds: string[]) => void;
+  onToggleRule?: (ruleId: string) => void;
+  onOpenInfoPanel?: () => void;
 }
 
 export const DataHealthView: React.FC<DataHealthViewProps> = ({
@@ -75,10 +84,102 @@ export const DataHealthView: React.FC<DataHealthViewProps> = ({
   onRunAiAnalysis,
   originalRecordCount,
   onNavigateToLog,
+  rawValidationFlags,
+  enabledRuleIds,
+  onEnableAllRules,
+  onDisableRule,
+  onDisableRules,
+  onToggleRule,
+  onOpenInfoPanel,
 }) => {
   const [copyValidationStatus, setCopyValidationStatus] = useState<'idle' | 'copied'>('idle');
   const [activeFilter, setActiveFilter] = useState<'all' | 'errors' | 'warnings' | 'ai'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  // Right-Click Context Menu State
+  const [healthContextMenu, setHealthContextMenu] = useState<{
+    x: number;
+    y: number;
+    rules: ValidationRuleDef[];
+    item?: AIFlaggedRecord;
+    reason?: string;
+    affectedCount?: number;
+  } | null>(null);
+
+  const showToast = useCallback((msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => {
+      setToastMsg(prev => prev === msg ? null : prev);
+    }, 3000);
+  }, []);
+
+  const handleItemContextMenu = useCallback((
+    e: React.MouseEvent,
+    reasons: string[],
+    item?: AIFlaggedRecord,
+    affectedCount?: number
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const rules = getRulesForReasons(reasons);
+    if (rules.length === 0) return;
+
+    const menuWidth = 300;
+    const menuHeight = 280;
+    const x = Math.min(e.clientX, window.innerWidth - menuWidth - 10);
+    const y = Math.min(e.clientY, window.innerHeight - menuHeight - 10);
+
+    setHealthContextMenu({
+      x: Math.max(10, x),
+      y: Math.max(10, y),
+      rules,
+      item,
+      reason: reasons[0],
+      affectedCount
+    });
+  }, []);
+
+  const handleDisableRule = useCallback((rule: ValidationRuleDef) => {
+    if (onDisableRule) {
+      onDisableRule(rule.id);
+    } else if (onToggleRule) {
+      onToggleRule(rule.id);
+    }
+    showToast(`Disabled rule: "${rule.name}". Issues hidden from report.`);
+    setHealthContextMenu(null);
+  }, [onDisableRule, onToggleRule, showToast]);
+
+  const handleDisableAllRules = useCallback((rules: ValidationRuleDef[]) => {
+    const ruleIds = rules.map(r => r.id);
+    if (onDisableRules) {
+      onDisableRules(ruleIds);
+    } else if (onDisableRule) {
+      ruleIds.forEach(id => onDisableRule(id));
+    }
+    showToast(`Disabled ${rules.length} rule(s). Issues hidden.`);
+    setHealthContextMenu(null);
+  }, [onDisableRules, onDisableRule, showToast]);
+
+  useEffect(() => {
+    const handleGlobalClick = () => {
+      if (healthContextMenu) {
+        setHealthContextMenu(null);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setHealthContextMenu(null);
+      }
+    };
+    window.addEventListener('click', handleGlobalClick);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('click', handleGlobalClick);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [healthContextMenu]);
 
   // Partition flags into strict errors vs warnings
   const { errorFlags, warningFlags } = useMemo(() => {
@@ -195,7 +296,12 @@ export const DataHealthView: React.FC<DataHealthViewProps> = ({
             {Array.from(groupedReasons.entries()).map(([reason, affectedFlags], idx) => {
               const cleanReason = reason.startsWith('[WARNING]') ? reason.replace('[WARNING] ', '').replace('[WARNING]', '') : reason;
               return (
-                <div key={idx} className={`p-2 rounded border ${cardBgClass} flex flex-col sm:flex-row sm:items-center justify-between gap-1.5`}>
+                <div 
+                  key={idx} 
+                  onContextMenu={(e) => handleItemContextMenu(e, [reason], undefined, affectedFlags.length)}
+                  className={`p-2 rounded border ${cardBgClass} flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 cursor-context-menu hover:shadow-xs transition-shadow`}
+                  title="Right-click to disable rule and hide these issues"
+                >
                   <p className={`font-semibold text-xs ${reasonTextClass}`}>
                     {cleanReason}
                   </p>
@@ -221,7 +327,9 @@ export const DataHealthView: React.FC<DataHealthViewProps> = ({
             {individualReasons.map(({ item, reasons }, idx) => (
               <div 
                 key={idx} 
-                className={`p-2 rounded border ${cardBgClass} text-xs hover:border-slate-300 transition-colors space-y-1`}
+                onContextMenu={(e) => handleItemContextMenu(e, reasons, item)}
+                className={`p-2 rounded border ${cardBgClass} text-xs hover:border-slate-300 transition-colors space-y-1 cursor-context-menu`}
+                title="Right-click to disable rule and hide these errors"
               >
                 {/* Compact Row Header Bar */}
                 <div className="flex items-center justify-between flex-wrap gap-1.5">
@@ -500,6 +608,28 @@ export const DataHealthView: React.FC<DataHealthViewProps> = ({
             )}
           </div>
 
+          {onOpenInfoPanel && (
+            <button
+              onClick={onOpenInfoPanel}
+              title="Configure validation rules in right panel"
+              className={`flex items-center gap-1.5 px-2 py-1 text-xs font-semibold rounded transition-colors shadow-2xs ${
+                enabledRuleIds && enabledRuleIds.size < VALIDATION_RULES.length
+                  ? 'bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200'
+                  : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
+              }`}
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5 text-slate-600" />
+              <span>Rules</span>
+              {enabledRuleIds && (
+                <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded font-bold ${
+                  enabledRuleIds.size < VALIDATION_RULES.length ? 'bg-amber-200 text-amber-900' : 'bg-slate-100 text-slate-600'
+                }`}>
+                  {enabledRuleIds.size}/{VALIDATION_RULES.length}
+                </span>
+              )}
+            </button>
+          )}
+
           {/* Actions: Copy All & Sheet View */}
           {dataValidationFlags.length > 0 && (
             <button
@@ -534,6 +664,36 @@ export const DataHealthView: React.FC<DataHealthViewProps> = ({
         </div>
       </div>
 
+      {/* Rule Filter Active Notification Banner */}
+      {enabledRuleIds && enabledRuleIds.size < VALIDATION_RULES.length && (
+        <div className="bg-amber-50/90 border border-amber-200 rounded-lg px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-900 shadow-2xs shrink-0">
+          <div className="flex items-center gap-2">
+            <SlidersHorizontal className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+            <span>
+              <strong>Rule Filter Active:</strong> {enabledRuleIds.size} of {VALIDATION_RULES.length} validation rules enabled ({VALIDATION_RULES.length - enabledRuleIds.size} disabled). Issues matching disabled rules are hidden.
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {onEnableAllRules && (
+              <button
+                onClick={onEnableAllRules}
+                className="px-2 py-0.5 bg-white border border-amber-300 rounded font-semibold text-amber-800 hover:bg-amber-100 transition-colors text-[11px]"
+              >
+                Enable All Rules
+              </button>
+            )}
+            {onOpenInfoPanel && (
+              <button
+                onClick={onOpenInfoPanel}
+                className="px-2 py-0.5 bg-amber-600 text-white rounded font-semibold hover:bg-amber-700 transition-colors text-[11px]"
+              >
+                Configure in Panel
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Main Validation Content - Immediate Focus on Issues */}
       <div className="space-y-2 flex-1 min-h-0 overflow-y-auto pr-1">
         {hasNoIssues ? (
@@ -565,6 +725,127 @@ export const DataHealthView: React.FC<DataHealthViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* Right-Click Context Menu for Disabling Rule */}
+      {healthContextMenu && (
+        <div 
+          className="fixed z-50 bg-white border border-slate-300 rounded-xl shadow-2xl py-1.5 w-80 text-xs animate-fade-in font-sans"
+          style={{ left: `${healthContextMenu.x}px`, top: `${healthContextMenu.y}px` }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between px-3 py-1.5 border-b border-slate-200 bg-slate-50 rounded-t-xl">
+            <div className="flex items-center gap-1.5">
+              <SlidersHorizontal className="w-3.5 h-3.5 text-blue-600" />
+              <span className="font-bold text-slate-800">
+                Validation Rule Options
+              </span>
+            </div>
+            <button 
+              onClick={() => setHealthContextMenu(null)}
+              className="text-slate-400 hover:text-slate-600 rounded p-0.5"
+              title="Close menu"
+            >
+              <CloseIcon className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* Rule disable actions */}
+          <div className="p-2 space-y-1.5 border-b border-slate-200 bg-amber-50/20">
+            <div className="px-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+              Disable Rule to Hide Error(s)
+            </div>
+
+            {healthContextMenu.rules.map((rule) => (
+              <button
+                key={rule.id}
+                onClick={() => handleDisableRule(rule)}
+                className="w-full text-left p-2 rounded-lg bg-white border border-slate-200 hover:border-amber-300 hover:bg-amber-50/80 transition-colors shadow-2xs group flex items-start gap-2"
+              >
+                {rule.severity === 'error' ? (
+                  <XCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="font-bold text-xs text-slate-900 group-hover:text-amber-900">
+                      Disable: {rule.name}
+                    </span>
+                    <span className="text-[9px] font-bold px-1 py-0.2 bg-slate-100 text-slate-600 rounded uppercase">
+                      {rule.category}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-0.5 line-clamp-2">
+                    {rule.shortDesc}
+                  </p>
+                </div>
+              </button>
+            ))}
+
+            {healthContextMenu.rules.length > 1 && (
+              <button
+                onClick={() => handleDisableAllRules(healthContextMenu.rules)}
+                className="w-full mt-1 py-1.5 px-2 bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-2xs"
+              >
+                <span>⚡ Disable all {healthContextMenu.rules.length} rules on this row</span>
+              </button>
+            )}
+          </div>
+
+          {/* General Actions */}
+          <div className="py-1">
+            {healthContextMenu.reason && (
+              <button
+                onClick={() => {
+                  const clean = healthContextMenu.reason?.replace('[WARNING] ', '').replace('[WARNING]', '') || '';
+                  navigator.clipboard.writeText(clean);
+                  showToast('Copied issue description to clipboard');
+                  setHealthContextMenu(null);
+                }}
+                className="w-full text-left px-3 py-1.5 hover:bg-slate-100 flex items-center gap-2 text-slate-700"
+              >
+                <CopyIcon className="w-3.5 h-3.5 text-slate-400" />
+                <span>Copy Issue Text</span>
+              </button>
+            )}
+
+            {onNavigateToLog && (
+              <button
+                onClick={() => {
+                  onNavigateToLog();
+                  setHealthContextMenu(null);
+                }}
+                className="w-full text-left px-3 py-1.5 hover:bg-slate-100 flex items-center gap-2 text-slate-700"
+              >
+                <FileSheetIcon className="w-3.5 h-3.5 text-blue-500" />
+                <span>View Row in Sheet</span>
+              </button>
+            )}
+
+            {onOpenInfoPanel && (
+              <button
+                onClick={() => {
+                  onOpenInfoPanel();
+                  setHealthContextMenu(null);
+                }}
+                className="w-full text-left px-3 py-1.5 hover:bg-slate-100 flex items-center gap-2 text-blue-700 font-medium"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5 text-blue-500" />
+                <span>Configure in Rules & Details Panel</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Toast Notification */}
+      {toastMsg && (
+        <div className="fixed bottom-6 right-6 z-50 bg-slate-900 text-white text-xs px-3.5 py-2 rounded-lg shadow-xl border border-slate-700 flex items-center gap-2 animate-fade-in">
+          <Check className="w-3.5 h-3.5 text-emerald-400" />
+          <span>{toastMsg}</span>
+        </div>
+      )}
     </div>
   );
 };

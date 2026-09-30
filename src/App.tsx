@@ -1,9 +1,10 @@
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { processExcelFile, processDataMatrix, parsePastedTextToMatrix } from './services/excelProcessor';
 import { analyzeAcknowledgements, describeImage } from './services/geminiService';
 import { processContactSheet } from './services/contactSheetProcessor';
 import { validateData } from './services/dataValidator';
+import { VALIDATION_RULES, DEFAULT_ENABLED_RULE_IDS, filterFlagsByEnabledRules } from './services/validationRules';
 import { FileUpload } from './components/FileUpload';
 import { ResultsTable } from './components/ResultsTable';
 import { ErrorIcon } from './components/icons/ErrorIcon';
@@ -135,9 +136,41 @@ const App: React.FC = () => {
   const [removedDuplicates, setRemovedDuplicates] = useState<AcknowledgementRecord[]>([]);
   const [crossCategoryDuplicates, setCrossCategoryDuplicates] = useState<AcknowledgementRecord[]>([]);
   
-  // State for Data Validation
-  const [dataValidationFlags, setDataValidationFlags] = useState<AIFlaggedRecord[]>([]);
-  const [highlightedRowIndices, setHighlightedRowIndices] = useState<number[]>([]);
+  // State for Data Validation Rules & Flags
+  const [rawValidationFlags, setRawValidationFlags] = useState<AIFlaggedRecord[]>([]);
+  const [enabledRuleIds, setEnabledRuleIds] = useState<Set<string>>(new Set(DEFAULT_ENABLED_RULE_IDS));
+
+  const dataValidationFlags = useMemo(() => {
+    return filterFlagsByEnabledRules(rawValidationFlags, enabledRuleIds);
+  }, [rawValidationFlags, enabledRuleIds]);
+
+  const highlightedRowIndices = useMemo(() => {
+    return dataValidationFlags.map(flag => flag.originalRowIndex);
+  }, [dataValidationFlags]);
+
+  const handleToggleRule = useCallback((ruleId: string) => {
+    setEnabledRuleIds(prev => {
+      const next = new Set(prev);
+      if (next.has(ruleId)) {
+        next.delete(ruleId);
+      } else {
+        next.add(ruleId);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleEnableAllRules = useCallback(() => {
+    setEnabledRuleIds(new Set(VALIDATION_RULES.map(r => r.id)));
+  }, []);
+
+  const handleDisableAllRules = useCallback(() => {
+    setEnabledRuleIds(new Set());
+  }, []);
+
+  const handleResetRules = useCallback(() => {
+    setEnabledRuleIds(new Set(DEFAULT_ENABLED_RULE_IDS));
+  }, []);
 
 
   // State for AI Analysis
@@ -187,7 +220,7 @@ const App: React.FC = () => {
       setOriginalRecordCount(allRecords.length);
 
       const validationFlags = validateData(updatedRawData, headerRowIndex, columnIndices);
-      setDataValidationFlags(validationFlags);
+      setRawValidationFlags(validationFlags);
 
       const coverRecords = allRecords.filter(r => isCoverPage(r.pageNumber));
       const nonCoverRecords = allRecords.filter(r => !isCoverPage(r.pageNumber));
@@ -335,8 +368,14 @@ const App: React.FC = () => {
           setNonCoverData(parsed.nonCoverData || []);
           setRemovedDuplicates(parsed.removedDuplicates || []);
           setCrossCategoryDuplicates(parsed.crossCategoryDuplicates || []);
-          setDataValidationFlags(parsed.dataValidationFlags || []);
-          setHighlightedRowIndices(parsed.highlightedRowIndices || []);
+          if (parsed.rawValidationFlags) {
+            setRawValidationFlags(parsed.rawValidationFlags);
+          } else if (parsed.dataValidationFlags) {
+            setRawValidationFlags(parsed.dataValidationFlags);
+          }
+          if (Array.isArray(parsed.enabledRuleIds)) {
+            setEnabledRuleIds(new Set(parsed.enabledRuleIds));
+          }
           setRawData(parsed.rawData || []);
           setHeaderRowIndex(parsed.headerRowIndex ?? -1);
           setColumnIndices(parsed.columnIndices || null);
@@ -363,8 +402,8 @@ const App: React.FC = () => {
           nonCoverData,
           removedDuplicates,
           crossCategoryDuplicates,
-          dataValidationFlags,
-          highlightedRowIndices,
+          rawValidationFlags,
+          enabledRuleIds: Array.from(enabledRuleIds),
           rawData,
           headerRowIndex,
           columnIndices,
@@ -379,7 +418,7 @@ const App: React.FC = () => {
         localStorage.removeItem('assessment_log_helper_state_v1');
       } catch (e) {}
     }
-  }, [status, fileName, isbn, title, originalRecordCount, originalRecords, coverData, nonCoverData, removedDuplicates, crossCategoryDuplicates, dataValidationFlags, highlightedRowIndices, rawData, headerRowIndex, columnIndices, activeView]);
+  }, [status, fileName, isbn, title, originalRecordCount, originalRecords, coverData, nonCoverData, removedDuplicates, crossCategoryDuplicates, rawValidationFlags, enabledRuleIds, rawData, headerRowIndex, columnIndices, activeView]);
 
   const handlePasswordSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -445,8 +484,8 @@ const App: React.FC = () => {
     setNonCoverData([]);
     setRemovedDuplicates([]);
     setCrossCategoryDuplicates([]);
-    setDataValidationFlags([]);
-    setHighlightedRowIndices([]);
+    setRawValidationFlags([]);
+    setEnabledRuleIds(new Set(DEFAULT_ENABLED_RULE_IDS));
     setAiFlags([]);
     setAiAnalysisStatus('idle');
     setIsbn(null);
@@ -478,8 +517,7 @@ const App: React.FC = () => {
     setStatus('processing');
     setFileName(file.name);
     setError(null);
-    setDataValidationFlags([]);
-    setHighlightedRowIndices([]);
+    setRawValidationFlags([]);
     setAiFlags([]);
     setAiAnalysisStatus('idle');
     setIsbn(null);
@@ -496,8 +534,7 @@ const App: React.FC = () => {
       setColumnIndices(columnIndices);
 
       const validationFlags = validateData(allRawData, headerRowIndex, columnIndices);
-      setDataValidationFlags(validationFlags);
-      setHighlightedRowIndices(validationFlags.map(flag => flag.originalRowIndex));
+      setRawValidationFlags(validationFlags);
 
 
       setOriginalRecords(allRecords);
@@ -540,8 +577,7 @@ const App: React.FC = () => {
     setStatus('processing');
     setFileName('Pasted_Log.tsv');
     setError(null);
-    setDataValidationFlags([]);
-    setHighlightedRowIndices([]);
+    setRawValidationFlags([]);
     setAiFlags([]);
     setAiAnalysisStatus('idle');
     setIsbn(null);
@@ -559,8 +595,7 @@ const App: React.FC = () => {
       setColumnIndices(columnIndices);
 
       const validationFlags = validateData(allRawData, headerRowIndex, columnIndices);
-      setDataValidationFlags(validationFlags);
-      setHighlightedRowIndices(validationFlags.map(flag => flag.originalRowIndex));
+      setRawValidationFlags(validationFlags);
 
       setOriginalRecords(allRecords);
       setRawData(allRawData);
@@ -602,8 +637,7 @@ const App: React.FC = () => {
     setUnsavedChangesCount(0);
     setLastSyncedAt(new Date().toISOString());
     setError(null);
-    setDataValidationFlags([]);
-    setHighlightedRowIndices([]);
+    setRawValidationFlags([]);
     setAiFlags([]);
     setAiAnalysisStatus('idle');
     setIsbn(null);
@@ -644,8 +678,7 @@ const App: React.FC = () => {
       setColumnIndices(columnIndices);
 
       const validationFlags = validateData(allRawData, headerRowIndex, columnIndices);
-      setDataValidationFlags(validationFlags);
-      setHighlightedRowIndices(validationFlags.map(flag => flag.originalRowIndex));
+      setRawValidationFlags(validationFlags);
 
       setOriginalRecords(allRecords);
       setRawData(allRawData);
@@ -1338,6 +1371,21 @@ const App: React.FC = () => {
                           coverData={coverData}
                           nonCoverData={nonCoverData}
                           dataValidationFlags={dataValidationFlags}
+                          onToggleRule={handleToggleRule}
+                          onDisableRule={(ruleId: string) => {
+                            setEnabledRuleIds(prev => {
+                              const next = new Set(prev);
+                              next.delete(ruleId);
+                              return next;
+                            });
+                          }}
+                          onDisableRules={(ruleIds: string[]) => {
+                            setEnabledRuleIds(prev => {
+                              const next = new Set(prev);
+                              ruleIds.forEach(id => next.delete(id));
+                              return next;
+                            });
+                          }}
                         />
                       </div>
                     )}
@@ -1349,6 +1397,23 @@ const App: React.FC = () => {
                         columnIndices={columnIndices}
                         dataValidationFlags={dataValidationFlags}
                         fileName={fileName}
+                        enabledRuleIds={enabledRuleIds}
+                        onToggleRule={handleToggleRule}
+                        onDisableRule={(ruleId: string) => {
+                          setEnabledRuleIds(prev => {
+                            const next = new Set(prev);
+                            next.delete(ruleId);
+                            return next;
+                          });
+                        }}
+                        onDisableRules={(ruleIds: string[]) => {
+                          setEnabledRuleIds(prev => {
+                            const next = new Set(prev);
+                            ruleIds.forEach(id => next.delete(id));
+                            return next;
+                          });
+                        }}
+                        onOpenInfoPanel={() => setIsInfoPanelOpen(true)}
                       />
                     )}
 
@@ -1356,6 +1421,25 @@ const App: React.FC = () => {
                       <div className="flex-1 min-h-0 overflow-auto">
                         <DataHealthView
                           dataValidationFlags={dataValidationFlags}
+                          rawValidationFlags={rawValidationFlags}
+                          enabledRuleIds={enabledRuleIds}
+                          onEnableAllRules={handleEnableAllRules}
+                          onDisableRule={(ruleId: string) => {
+                            setEnabledRuleIds(prev => {
+                              const next = new Set(prev);
+                              next.delete(ruleId);
+                              return next;
+                            });
+                          }}
+                          onDisableRules={(ruleIds: string[]) => {
+                            setEnabledRuleIds(prev => {
+                              const next = new Set(prev);
+                              ruleIds.forEach(id => next.delete(id));
+                              return next;
+                            });
+                          }}
+                          onToggleRule={handleToggleRule}
+                          onOpenInfoPanel={() => setIsInfoPanelOpen(true)}
                           aiAnalysisStatus={aiAnalysisStatus}
                           aiFlags={aiFlags}
                           onRunAiAnalysis={handleRunAiAnalysis}
@@ -1400,6 +1484,13 @@ const App: React.FC = () => {
                 mainCreditsCount={nonCoverData.length}
                 removedDuplicates={removedDuplicates}
                 crossCategoryDuplicates={crossCategoryDuplicates}
+                activeView={activeView}
+                rawValidationFlags={rawValidationFlags}
+                enabledRuleIds={enabledRuleIds}
+                onToggleRule={handleToggleRule}
+                onEnableAllRules={handleEnableAllRules}
+                onDisableAllRules={handleDisableAllRules}
+                onResetRules={handleResetRules}
               />
             </div>
 

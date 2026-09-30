@@ -1,5 +1,12 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import type { HeaderIndices, AIFlaggedRecord } from '../types';
+import { 
+  VALIDATION_RULES, 
+  getRulesForReasons, 
+  getRuleIdForReason, 
+  getRuleById, 
+  type ValidationRuleDef 
+} from '../services/validationRules';
 import { RowDetailModal } from './RowDetailModal';
 import { ErrorIcon } from './icons/ErrorIcon';
 import { CopyIcon } from './icons/CopyIcon';
@@ -10,7 +17,7 @@ import {
   Search, SlidersHorizontal, Check, FileSpreadsheet, ArrowRight, Info, AlertTriangle, 
   XCircle, ArrowUpDown, ArrowUp, ArrowDown, Pin, PinOff, WrapText, AlignLeft, 
   Maximize2, Minimize2, RotateCcw, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
-  Eye, EyeOff, MoveLeft, MoveRight, Settings2, Grid
+  Eye, EyeOff, MoveLeft, MoveRight, Settings2, Grid, CheckCheck, Ban, Copy
 } from 'lucide-react';
 
 export interface ColumnMeta {
@@ -76,6 +83,11 @@ interface UploadedLogViewProps {
   columnIndices: HeaderIndices | null;
   dataValidationFlags?: AIFlaggedRecord[];
   fileName?: string;
+  enabledRuleIds?: Set<string>;
+  onDisableRule?: (ruleId: string) => void;
+  onDisableRules?: (ruleIds: string[]) => void;
+  onToggleRule?: (ruleId: string) => void;
+  onOpenInfoPanel?: () => void;
 }
 
 export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
@@ -83,6 +95,11 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
   headerRowIndex,
   dataValidationFlags = [],
   fileName,
+  enabledRuleIds,
+  onDisableRule,
+  onDisableRules,
+  onToggleRule,
+  onOpenInfoPanel,
 }) => {
   // Column visibility & ordering
   const [isColumnManagerOpen, setIsColumnManagerOpen] = useState(false);
@@ -116,9 +133,21 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
   const [isViewSettingsOpen, setIsViewSettingsOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // Action status
+  // Action status & toast feedback
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied'>('idle');
   const [cellCopyStatus, setCellCopyStatus] = useState<'idle' | 'copied'>('idle');
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Right-Click Context Menu State
+  const [rowContextMenu, setRowContextMenu] = useState<{
+    x: number;
+    y: number;
+    rowObj: { originalRowIndex: number; excelRowNumber: number; data: (string | number)[] };
+    reasons: string[];
+    rules: ValidationRuleDef[];
+    isError: boolean;
+    isWarning: boolean;
+  } | null>(null);
 
   // Active Column Menu popup
   const [activeHeaderMenu, setActiveHeaderMenu] = useState<number | null>(null);
@@ -127,6 +156,97 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const managerPanelRef = useRef<HTMLDivElement>(null);
   const settingsPanelRef = useRef<HTMLDivElement>(null);
+
+  // Validation map
+  const validationMap = useMemo(() => {
+    const map = new Map<number, { isError: boolean; isWarning: boolean; reasons: string[] }>();
+    dataValidationFlags.forEach(flag => {
+      const reasons = flag.reason ? flag.reason.split('|||') : [];
+      const hasErrors = reasons.some(r => !r.startsWith('[WARNING]'));
+      const hasWarnings = reasons.some(r => r.startsWith('[WARNING]'));
+      map.set(flag.originalRowIndex, {
+        isError: hasErrors,
+        isWarning: hasWarnings,
+        reasons
+      });
+    });
+    return map;
+  }, [dataValidationFlags]);
+
+  const showToast = useCallback((msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage(prev => prev === msg ? null : prev);
+    }, 3000);
+  }, []);
+
+  const handleRowContextMenu = useCallback((e: React.MouseEvent, rowObj: { originalRowIndex: number; excelRowNumber: number; data: (string | number)[] }) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const valInfo = validationMap.get(rowObj.originalRowIndex);
+    const reasons = valInfo?.reasons || [];
+    const rules = getRulesForReasons(reasons);
+    const isError = valInfo?.isError ?? false;
+    const isWarning = valInfo?.isWarning ?? false;
+
+    // Safety clamping coordinates
+    const menuWidth = 320;
+    const menuHeight = 360;
+    const x = Math.min(e.clientX, window.innerWidth - menuWidth - 10);
+    const y = Math.min(e.clientY, window.innerHeight - menuHeight - 10);
+
+    setRowContextMenu({
+      x: Math.max(10, x),
+      y: Math.max(10, y),
+      rowObj,
+      reasons,
+      rules,
+      isError,
+      isWarning
+    });
+  }, [validationMap]);
+
+  const handleDehighlightRule = useCallback((rule: ValidationRuleDef) => {
+    if (onDisableRule) {
+      onDisableRule(rule.id);
+    } else if (onToggleRule) {
+      onToggleRule(rule.id);
+    }
+    showToast(`De-highlighted: "${rule.name}". Red highlight removed.`);
+    setRowContextMenu(null);
+  }, [onDisableRule, onToggleRule, showToast]);
+
+  const handleDehighlightAllRules = useCallback((rules: ValidationRuleDef[]) => {
+    const ruleIds = rules.map(r => r.id);
+    if (onDisableRules) {
+      onDisableRules(ruleIds);
+    } else if (onDisableRule) {
+      ruleIds.forEach(id => onDisableRule(id));
+    }
+    showToast(`De-highlighted ${rules.length} rule type(s). Red highlights removed.`);
+    setRowContextMenu(null);
+  }, [onDisableRules, onDisableRule, showToast]);
+
+  // Close context menu on outside click or escape
+  useEffect(() => {
+    const handleGlobalClick = () => {
+      if (rowContextMenu) {
+        setRowContextMenu(null);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setRowContextMenu(null);
+      }
+    };
+    window.addEventListener('click', handleGlobalClick);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('click', handleGlobalClick);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [rowContextMenu]);
 
   // Compute all column metadata from rawData
   const allColumns = useMemo<ColumnMeta[]>(() => {
@@ -200,22 +320,6 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
   }, [defaultColOrder]);
 
   const visibleColumnSet = useMemo(() => new Set(columnOrder), [columnOrder]);
-
-  // Validation map
-  const validationMap = useMemo(() => {
-    const map = new Map<number, { isError: boolean; isWarning: boolean; reasons: string[] }>();
-    dataValidationFlags.forEach(flag => {
-      const reasons = flag.reason ? flag.reason.split('|||') : [];
-      const hasErrors = reasons.some(r => !r.startsWith('[WARNING]'));
-      const hasWarnings = reasons.some(r => r.startsWith('[WARNING]'));
-      map.set(flag.originalRowIndex, {
-        isError: hasErrors,
-        isWarning: hasWarnings,
-        reasons
-      });
-    });
-    return map;
-  }, [dataValidationFlags]);
 
   // Extract valid data rows
   const allDataRows = useMemo(() => {
@@ -1471,13 +1575,15 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
                       id={`sheet-row-${rowObj.excelRowNumber}`}
                       key={rowObj.originalRowIndex}
                       onDoubleClick={() => handleInspectRowByNumber(rowObj.excelRowNumber)}
+                      onContextMenu={(e) => handleRowContextMenu(e, rowObj)}
                       className={`transition-colors ${rowBg} ${rowHeightClass}`}
                     >
                       {/* Sticky Row Number Cell */}
                       <td
                         onClick={() => handleInspectRowByNumber(rowObj.excelRowNumber)}
+                        onContextMenu={(e) => handleRowContextMenu(e, rowObj)}
                         className={`sticky left-0 z-10 px-2 text-center text-[11px] font-mono border-r border-b border-slate-200 select-none cursor-pointer hover:bg-blue-100/70 ${indexBg}`}
-                        title={tooltipText ? `Row ${rowObj.excelRowNumber} (Click to inspect):\n• ${tooltipText}` : `Row ${rowObj.excelRowNumber} (Double click to inspect)`}
+                        title={tooltipText ? `Row ${rowObj.excelRowNumber} (Click to inspect, Right-click to de-highlight):\n• ${tooltipText}` : `Row ${rowObj.excelRowNumber} (Double click to inspect, Right-click for options)`}
                       >
                         <div className="flex items-center justify-center gap-1">
                           {isError && (
@@ -1520,6 +1626,7 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
                                 isWarning
                               });
                             }}
+                            onContextMenu={(e) => handleRowContextMenu(e, rowObj)}
                             className={`px-2 py-1 text-slate-800 border-r border-b border-slate-200/80 cursor-pointer transition-colors overflow-hidden ${
                               isFirstFrozen ? 'sticky left-14 z-10 bg-inherit border-r-2 border-r-blue-300 shadow-sm' : ''
                             } ${
@@ -1659,7 +1766,172 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
       </div>
 
       {/* ========================================================================= */}
-      {/* 6. ROW DETAIL MODAL (SIDE INSPECTOR FOR INDIVIDUAL RECORD)                 */}
+      {/* 6. RIGHT-CLICK ROW CONTEXT MENU POPUP (DE-HIGHLIGHTING RULES)              */}
+      {/* ========================================================================= */}
+      {rowContextMenu && (
+        <div 
+          className="fixed z-50 bg-white border border-slate-300 rounded-xl shadow-2xl py-1.5 w-84 text-xs animate-fade-in font-sans"
+          style={{ left: `${rowContextMenu.x}px`, top: `${rowContextMenu.y}px` }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between px-3 py-1.5 border-b border-slate-200 bg-slate-50 rounded-t-xl">
+            <div className="flex items-center gap-1.5">
+              <span className="font-bold text-slate-800">
+                Row {rowContextMenu.rowObj.excelRowNumber}
+              </span>
+              {rowContextMenu.rules.length > 0 ? (
+                <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                  rowContextMenu.isError ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-800'
+                }`}>
+                  {rowContextMenu.rules.length} error {rowContextMenu.rules.length === 1 ? 'type' : 'types'}
+                </span>
+              ) : (
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] font-medium bg-green-100 text-green-700">
+                  No errors
+                </span>
+              )}
+            </div>
+            <button 
+              onClick={() => setRowContextMenu(null)}
+              className="text-slate-400 hover:text-slate-600 rounded p-0.5"
+              title="Close menu"
+            >
+              <CloseIcon className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* De-highlight / Disable Rules Section */}
+          {rowContextMenu.rules.length > 0 && (
+            <div className="p-2 space-y-1.5 border-b border-slate-200 bg-red-50/20">
+              <div className="px-1 flex items-center justify-between text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                <span>Remove Red Highlight</span>
+                <span className="text-slate-400 font-normal">Disables rule</span>
+              </div>
+
+              {rowContextMenu.rules.length === 1 ? (
+                /* Single rule on row */
+                <button
+                  onClick={() => handleDehighlightRule(rowContextMenu.rules[0])}
+                  className="w-full text-left p-2 rounded-lg bg-white border border-red-200 hover:bg-red-50 hover:border-red-300 transition-colors shadow-2xs group flex items-start gap-2"
+                >
+                  {rowContextMenu.rules[0].severity === 'error' ? (
+                    <XCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="font-bold text-xs text-red-900 group-hover:underline">
+                        &rarr; De-highlight: {rowContextMenu.rules[0].name}
+                      </span>
+                      <span className="text-[9px] font-bold px-1 py-0.2 bg-red-100 text-red-700 rounded uppercase">
+                        {rowContextMenu.rules[0].severity}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5 leading-tight">
+                      {rowContextMenu.rules[0].shortDesc}
+                    </p>
+                  </div>
+                </button>
+              ) : (
+                /* Multiple rules on row - arrow selecting which one to de-highlight */
+                <div className="space-y-1">
+                  <p className="text-[11px] text-slate-600 px-1">
+                    Multiple error types found. Click an arrow below to de-highlight:
+                  </p>
+                  <div className="space-y-1 max-h-48 overflow-y-auto pr-0.5">
+                    {rowContextMenu.rules.map((rule) => (
+                      <button
+                        key={rule.id}
+                        onClick={() => handleDehighlightRule(rule)}
+                        className="w-full text-left p-2 rounded-lg bg-white border border-slate-200 hover:border-red-300 hover:bg-red-50/80 transition-colors shadow-2xs group flex items-start gap-2"
+                      >
+                        <span className="text-blue-600 font-bold text-sm shrink-0 mt-0.5 group-hover:translate-x-0.5 transition-transform">
+                          &rarr;
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="font-bold text-xs text-slate-900 group-hover:text-red-900">
+                              De-highlight: {rule.name}
+                            </span>
+                            <span className={`text-[9px] font-bold px-1 py-0.2 rounded shrink-0 uppercase ${
+                              rule.severity === 'error' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-800'
+                            }`}>
+                              {rule.severity}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-500 mt-0.5 line-clamp-1">
+                            {rule.shortDesc}
+                          </p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    onClick={() => handleDehighlightAllRules(rowContextMenu.rules)}
+                    className="w-full mt-1.5 py-1.5 px-2 bg-red-100 hover:bg-red-200 text-red-900 border border-red-300 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-2xs"
+                  >
+                    <span>⚡ De-highlight all issues on this row ({rowContextMenu.rules.length})</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* General Actions */}
+          <div className="py-1">
+            <button
+              onClick={() => {
+                handleInspectRowByNumber(rowContextMenu.rowObj.excelRowNumber);
+                setRowContextMenu(null);
+              }}
+              className="w-full text-left px-3 py-1.5 hover:bg-slate-100 flex items-center gap-2 text-slate-700"
+            >
+              <Search className="w-3.5 h-3.5 text-slate-400" />
+              <span>Inspect Row {rowContextMenu.rowObj.excelRowNumber}</span>
+            </button>
+
+            <button
+              onClick={() => {
+                const tsv = rowContextMenu.rowObj.data.join('\t');
+                navigator.clipboard.writeText(tsv);
+                showToast(`Copied Row ${rowContextMenu.rowObj.excelRowNumber} data to clipboard`);
+                setRowContextMenu(null);
+              }}
+              className="w-full text-left px-3 py-1.5 hover:bg-slate-100 flex items-center gap-2 text-slate-700"
+            >
+              <CopyIcon className="w-3.5 h-3.5 text-slate-400" />
+              <span>Copy Row Data (TSV)</span>
+            </button>
+
+            {onOpenInfoPanel && (
+              <button
+                onClick={() => {
+                  onOpenInfoPanel();
+                  setRowContextMenu(null);
+                }}
+                className="w-full text-left px-3 py-1.5 hover:bg-slate-100 flex items-center gap-2 text-blue-700 font-medium"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5 text-blue-500" />
+                <span>Configure Rules in Side Panel</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 bg-slate-900 text-white text-xs px-3.5 py-2 rounded-lg shadow-xl border border-slate-700 flex items-center gap-2 animate-fade-in">
+          <Check className="w-3.5 h-3.5 text-emerald-400" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 7. ROW DETAIL MODAL (SIDE INSPECTOR FOR INDIVIDUAL RECORD)                 */}
       {/* ========================================================================= */}
       {inspectedRow && (
         <RowDetailModal
