@@ -12,7 +12,7 @@ import { DropdownMenu } from './components/DropdownMenu';
 import { InfoPanel } from './components/InfoPanel';
 import { NavigationRail } from './components/NavigationRail';
 import { EditableLogModal } from './components/EditableLogModal';
-import { DataHealthModal } from './components/DataHealthModal';
+import { DataHealthView } from './components/DataHealthView';
 import { ExportModal } from './components/ExportModal';
 import { AnalysisView } from './components/AnalysisView';
 import { FilenameParser } from './components/FilenameParser';
@@ -161,10 +161,10 @@ const App: React.FC = () => {
 
 
   // UI State & File Data State
-  const [isInfoPanelOpen, setIsInfoPanelOpen] = useState(true);
+  const [isInfoPanelOpen, setIsInfoPanelOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [rawData, setRawData] = useState<(string | number)[][]>([]);
-  const [activeView, setActiveView] = useState<ActiveView>('credits');
+  const [activeView, setActiveView] = useState<ActiveView>('uploadedLog');
   const [headerRowIndex, setHeaderRowIndex] = useState(-1);
   const [columnIndices, setColumnIndices] = useState<HeaderIndices | null>(null);
 
@@ -487,7 +487,7 @@ const App: React.FC = () => {
     setOriginalRecordCount(0);
     setOriginalRecords([]);
     setRawData([]);
-    setActiveView('credits');
+    setActiveView('uploadedLog');
 
     try {
       const { records: allRecords, isbn: fileIsbn, title: fileTitle, rawData: allRawData, headerRowIndex, columnIndices } = await processExcelFile(file);
@@ -549,7 +549,7 @@ const App: React.FC = () => {
     setOriginalRecordCount(0);
     setOriginalRecords([]);
     setRawData([]);
-    setActiveView('credits');
+    setActiveView('uploadedLog');
 
     try {
       const rawMatrix = parsePastedTextToMatrix(pastedText);
@@ -611,7 +611,7 @@ const App: React.FC = () => {
     setOriginalRecordCount(0);
     setOriginalRecords([]);
     setRawData([]);
-    setActiveView('credits');
+    setActiveView('uploadedLog');
 
     try {
       const response = await fetch('/api/fetch-online-excel', {
@@ -1278,9 +1278,9 @@ const App: React.FC = () => {
       case 'success':
         return (
           <>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-1 min-h-0 overflow-hidden">
               <div 
-                className="flex-grow bg-white rounded-xl shadow-lg p-1 sm:p-2 flex gap-1 transition-all duration-300"
+                className="flex-grow bg-white rounded-xl shadow-lg p-1 sm:p-2 flex gap-1 transition-all duration-300 min-h-0 overflow-hidden"
                 style={{ marginBottom: '0px', marginTop: '0px' }}
               >
                 <NavigationRail
@@ -1288,9 +1288,19 @@ const App: React.FC = () => {
                     onNavigate={setActiveView}
                     dataValidationIssues={dataValidationFlags.length}
                 />
-                <div className="flex-grow min-w-0">
-                  <div className="flex justify-between items-center mb-2 px-2">
+                <div className="flex-grow min-w-0 flex flex-col min-h-0 overflow-hidden">
+                  <div className="flex justify-between items-center mb-1.5 px-2 flex-shrink-0">
                       <div className="flex items-center gap-2">
+                        <button
+                            onClick={() => setActiveView('uploadedLog')}
+                            className={`px-3 py-1 font-semibold rounded-lg text-xs transition-colors shadow-sm ${
+                                activeView === 'uploadedLog' 
+                                    ? 'bg-blue-600 text-white' 
+                                    : 'bg-white text-slate-600 border border-slate-300 hover:bg-slate-50'
+                            }`}
+                        >
+                            Uploaded Log (Original Order)
+                        </button>
                         <button
                             onClick={() => setActiveView('credits')}
                             className={`px-3 py-1 font-semibold rounded-lg text-xs transition-colors shadow-sm ${
@@ -1302,70 +1312,81 @@ const App: React.FC = () => {
                             Credits View
                         </button>
                         <button
-                            onClick={() => setActiveView('uploadedLog')}
-                            className={`px-3 py-1 font-semibold rounded-lg text-xs transition-colors shadow-sm ${
-                                activeView === 'uploadedLog' 
+                            onClick={() => setActiveView('dataHealth')}
+                            className={`px-3 py-1 font-semibold rounded-lg text-xs transition-colors shadow-sm flex items-center gap-1.5 ${
+                                activeView === 'dataHealth' 
                                     ? 'bg-blue-600 text-white' 
                                     : 'bg-white text-slate-600 border border-slate-300 hover:bg-slate-50'
                             }`}
                         >
-                            Uploaded Log (Original Order)
+                            <span>Data Health Report</span>
+                            {dataValidationFlags.length > 0 && (
+                              <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-full ${
+                                activeView === 'dataHealth' ? 'bg-red-500 text-white' : 'bg-red-100 text-red-700'
+                              }`}>
+                                {dataValidationFlags.length}
+                              </span>
+                            )}
                         </button>
                       </div>
-
-                      {activeView === 'credits' && (
-                        <button
-                            onClick={handleEditOriginal}
-                            className="flex items-center gap-2 px-3 py-1 bg-white text-slate-600 font-semibold rounded-lg border border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-opacity-75 transition-colors text-xs shadow-sm"
-                        >
-                            <EditIcon className="w-3.5 h-3.5" />
-                            <span>Edit Original Log</span>
-                        </button>
-                      )}
                   </div>
                   
-                  {activeView === 'credits' && (
-                    <ResultsTable 
-                      coverData={coverData}
-                      nonCoverData={nonCoverData}
-                      dataValidationFlags={dataValidationFlags}
-                    />
-                  )}
+                  <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                    {activeView === 'credits' && (
+                      <div className="flex-1 min-h-0 overflow-auto">
+                        <ResultsTable 
+                          coverData={coverData}
+                          nonCoverData={nonCoverData}
+                          dataValidationFlags={dataValidationFlags}
+                        />
+                      </div>
+                    )}
 
-                  {activeView === 'uploadedLog' && (
-                    <UploadedLogView 
-                      rawData={rawData}
-                      headerRowIndex={headerRowIndex}
-                      columnIndices={columnIndices}
-                      dataValidationFlags={dataValidationFlags}
-                      fileName={fileName}
-                      sourceUrl={sourceOnlineUrl}
-                      unsavedChangesCount={unsavedChangesCount}
-                      lastSyncedAt={lastSyncedAt}
-                      onRawDataChange={handleRawDataChange}
-                      onOpenSyncModal={() => setIsCloudSyncModalOpen(true)}
-                    />
-                  )}
-                  
-                  {activeView === 'analysis' && (
-                    <AnalysisView
-                        onProcessContactSheet={handleProcessContactSheet}
-                        onProcessDirectImages={handleProcessDirectImages}
-                        onResetContactSheet={handleContactSheetReset}
-                        contactSheetStatus={contactSheetStatus}
-                        imageAnalysisResults={imageAnalysisResults}
-                        contactSheetError={contactSheetError}
-                        processingProgress={processingProgress}
-                        onRetryFailedImages={handleRetryFailedImages}
-                    />
-                  )}
+                    {activeView === 'uploadedLog' && (
+                      <UploadedLogView 
+                        rawData={rawData}
+                        headerRowIndex={headerRowIndex}
+                        columnIndices={columnIndices}
+                        dataValidationFlags={dataValidationFlags}
+                        fileName={fileName}
+                      />
+                    )}
 
-                  {activeView === 'history' && (
-                      <div className="p-4 text-center text-slate-500">
+                    {activeView === 'dataHealth' && (
+                      <div className="flex-1 min-h-0 overflow-auto">
+                        <DataHealthView
+                          dataValidationFlags={dataValidationFlags}
+                          aiAnalysisStatus={aiAnalysisStatus}
+                          aiFlags={aiFlags}
+                          onRunAiAnalysis={handleRunAiAnalysis}
+                          originalRecordCount={originalRecordCount}
+                          onNavigateToLog={() => setActiveView('uploadedLog')}
+                        />
+                      </div>
+                    )}
+                    
+                    {activeView === 'analysis' && (
+                      <div className="flex-1 min-h-0 overflow-auto">
+                        <AnalysisView
+                            onProcessContactSheet={handleProcessContactSheet}
+                            onProcessDirectImages={handleProcessDirectImages}
+                            onResetContactSheet={handleContactSheetReset}
+                            contactSheetStatus={contactSheetStatus}
+                            imageAnalysisResults={imageAnalysisResults}
+                            contactSheetError={contactSheetError}
+                            processingProgress={processingProgress}
+                            onRetryFailedImages={handleRetryFailedImages}
+                        />
+                      </div>
+                    )}
+
+                    {activeView === 'history' && (
+                      <div className="flex-1 min-h-0 overflow-auto p-4 text-center text-slate-500">
                           <h2 className="text-xl font-semibold">Coming Soon</h2>
                           <p>This section is under development.</p>
                       </div>
-                  )}
+                    )}
+                  </div>
 
                 </div>
               </div>
@@ -1381,20 +1402,10 @@ const App: React.FC = () => {
                 crossCategoryDuplicates={crossCategoryDuplicates}
               />
             </div>
-            
-            <DataHealthModal
-                isOpen={activeView === 'dataHealth'}
-                onClose={() => setActiveView('credits')}
-                dataValidationFlags={dataValidationFlags}
-                aiAnalysisStatus={aiAnalysisStatus}
-                aiFlags={aiFlags}
-                onRunAiAnalysis={handleRunAiAnalysis}
-                originalRecordCount={originalRecordCount}
-            />
 
             <ExportModal
                 isOpen={activeView === 'export'}
-                onClose={() => setActiveView('credits')}
+                onClose={() => setActiveView('uploadedLog')}
                 onDownloadWord={handleDownloadWord}
                 onDownloadSortedLog={handleDownloadSortedOriginal}
                 onDownloadOriginalLog={handleDownloadOriginal}
@@ -1449,8 +1460,8 @@ const App: React.FC = () => {
   ];
 
   return (
-    <main className="w-full px-3 py-2">
-      <div className="border-b border-slate-200" style={{ marginBottom: '1px', height: '25.957099999999997px' }}>
+    <main className="w-full px-3 py-2 h-screen max-h-screen flex flex-col overflow-hidden">
+      <div className="border-b border-slate-200 flex-shrink-0" style={{ marginBottom: '1px', height: '25.957099999999997px' }}>
         <nav className="-mb-px flex space-x-6 items-center" aria-label="Tabs" style={{ marginBottom: '10px' }}>
           <button
             onClick={() => setActiveTab('contactSheets')}
@@ -1554,12 +1565,12 @@ const App: React.FC = () => {
 
       {activeTab === 'logReview' && (
         isAuthenticated ? (
-          <>
-            <header className="mb-2 flex justify-between items-center">
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            <header className="mb-1.5 flex justify-between items-center flex-shrink-0">
               <div className="flex items-center gap-4">
                 <DropdownMenu items={menuItems} />
                 <div className="text-left">
-                  <h1 className="text-3xl font-bold text-slate-800">A.M.H</h1>
+                  <h1 className="text-2xl font-bold text-slate-800">A.M.H</h1>
                   <p className="text-slate-500"></p>
                 </div>
               </div>
@@ -1586,8 +1597,10 @@ const App: React.FC = () => {
                 </div>
               )}
             </header>
-            {renderContent()}
-          </>
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              {renderContent()}
+            </div>
+          </div>
         ) : (
           renderPasswordForm('Log Review')
         )

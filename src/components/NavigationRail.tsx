@@ -70,18 +70,18 @@ export const NavigationRail: React.FC<NavigationRailProps> = ({ activeView, onNa
                 
                 <ul className="space-y-2">
                     <NavItem 
-                        icon={<CreditsIcon className="w-6 h-6 flex-shrink-0" />} 
-                        label="Credits" 
-                        isExpanded={isExpanded} 
-                        isActive={activeView === 'credits'} 
-                        onClick={() => onNavigate('credits')} 
-                    />
-                    <NavItem 
                         icon={<FileSheetIcon className="w-6 h-6 flex-shrink-0" />} 
                         label="Uploaded Log" 
                         isExpanded={isExpanded} 
                         isActive={activeView === 'uploadedLog'} 
                         onClick={() => onNavigate('uploadedLog')} 
+                    />
+                    <NavItem 
+                        icon={<CreditsIcon className="w-6 h-6 flex-shrink-0" />} 
+                        label="Credits" 
+                        isExpanded={isExpanded} 
+                        isActive={activeView === 'credits'} 
+                        onClick={() => onNavigate('credits')} 
                     />
                     <NavItem 
                         icon={<DataHealthIcon className="w-6 h-6 flex-shrink-0" />} 

@@ -1,32 +1,24 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import type { HeaderIndices, AIFlaggedRecord } from '../types';
+import { RowDetailModal } from './RowDetailModal';
 import { ErrorIcon } from './icons/ErrorIcon';
 import { CopyIcon } from './icons/CopyIcon';
 import { DownloadIcon } from './icons/DownloadIcon';
 import { ChevronDownIcon } from './icons/ChevronDownIcon';
 import { CloseIcon } from './icons/CloseIcon';
-import { EditIcon } from './icons/EditIcon';
-import { RefreshIcon } from './icons/RefreshIcon';
-import { Globe, Plus, Trash2, Check, Cloud, Save } from 'lucide-react';
-
-interface UploadedLogViewProps {
-  rawData: (string | number)[][];
-  headerRowIndex: number;
-  columnIndices: HeaderIndices | null;
-  dataValidationFlags?: AIFlaggedRecord[];
-  fileName?: string;
-  sourceUrl?: string | null;
-  unsavedChangesCount?: number;
-  lastSyncedAt?: string | null;
-  onRawDataChange?: (newRawData: (string | number)[][]) => void;
-  onOpenSyncModal?: () => void;
-}
+import { 
+  Search, SlidersHorizontal, Check, FileSpreadsheet, ArrowRight, Info, AlertTriangle, 
+  XCircle, ArrowUpDown, ArrowUp, ArrowDown, Pin, PinOff, WrapText, AlignLeft, 
+  Maximize2, Minimize2, RotateCcw, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
+  Eye, EyeOff, MoveLeft, MoveRight, Settings2, Grid
+} from 'lucide-react';
 
 export interface ColumnMeta {
   index: number;
   letter: string;
   headerName: string;
   isDefault: boolean;
+  nonEmptyCount: number;
 }
 
 export const getColumnLetter = (colIndex: number): string => {
@@ -44,7 +36,6 @@ export const getColumnLetter = (colIndex: number): string => {
 // Target default column letters requested by user: B, C, D, E, F, G, H, Q
 const DEFAULT_VISIBLE_LETTERS = new Set(['B', 'C', 'D', 'E', 'F', 'G', 'H', 'Q']);
 
-// Default header keywords fallback
 const DEFAULT_VISIBLE_KEYWORDS = [
   'usage classification',
   'description',
@@ -59,46 +50,91 @@ const DEFAULT_VISIBLE_KEYWORDS = [
   'notes'
 ];
 
+export type RowDensity = 'compact' | 'standard' | 'comfortable' | 'wrap';
+export type FontSize = 'small' | 'medium' | 'large';
+
+interface SelectedCellState {
+  rowIdx: number;
+  excelRowNumber: number;
+  colIdx: number;
+  letter: string;
+  headerName: string;
+  value: string;
+  reasons: string[];
+  isError: boolean;
+  isWarning: boolean;
+}
+
+interface SortConfig {
+  colIndex: number | null;
+  direction: 'asc' | 'desc' | null;
+}
+
+interface UploadedLogViewProps {
+  rawData: (string | number)[][];
+  headerRowIndex: number;
+  columnIndices: HeaderIndices | null;
+  dataValidationFlags?: AIFlaggedRecord[];
+  fileName?: string;
+}
+
 export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
   rawData,
   headerRowIndex,
-  columnIndices,
   dataValidationFlags = [],
   fileName,
-  sourceUrl,
-  unsavedChangesCount = 0,
-  lastSyncedAt,
-  onRawDataChange,
-  onOpenSyncModal
 }) => {
-  const [isColumnSelectorOpen, setIsColumnSelectorOpen] = useState(false);
+  // Column visibility & ordering
+  const [isColumnManagerOpen, setIsColumnManagerOpen] = useState(false);
+  const [colSearchQuery, setColSearchQuery] = useState('');
+  
+  // Custom Column Widths
+  const [columnWidths, setColumnWidths] = useState<Record<number, number>>({});
+  const [colWidthPreset, setColWidthPreset] = useState<'tight' | 'normal' | 'wide' | 'fit' | 'custom'>('normal');
+  const [resizingCol, setResizingCol] = useState<{ index: number; startX: number; startWidth: number } | null>(null);
+
+  // Row Density & Height Customization
+  const [rowDensity, setRowDensity] = useState<RowDensity>('standard');
+  const [fontSize, setFontSize] = useState<FontSize>('medium');
+  const [zebraStriping, setZebraStriping] = useState(true);
+  const [showGridlines, setShowGridlines] = useState(true);
+  const [freezeFirstCol, setFreezeFirstCol] = useState(false);
+
+  // Sorting, Filtering & Search
   const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'issues' | 'errors' | 'warnings'>('all');
+  const [sortConfig, setSortConfig] = useState<SortConfig>({ colIndex: null, direction: null });
+  const [jumpRowInput, setJumpRowInput] = useState('');
+
+  // Pagination
+  const [pageSize, setPageSize] = useState<number | 'all'>(100);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Active Cell & Inspector Modal
+  const [selectedCell, setSelectedCell] = useState<SelectedCellState | null>(null);
+  const [inspectedRowIndex, setInspectedRowIndex] = useState<number | null>(null);
+  const [isViewSettingsOpen, setIsViewSettingsOpen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Action status
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied'>('idle');
-  const selectorRef = useRef<HTMLDivElement>(null);
+  const [cellCopyStatus, setCellCopyStatus] = useState<'idle' | 'copied'>('idle');
 
-  // Cell editing state
-  const [editingCell, setEditingCell] = useState<{ rowIndex: number; colIndex: number } | null>(null);
-  const [editValue, setEditValue] = useState<string>('');
+  // Active Column Menu popup
+  const [activeHeaderMenu, setActiveHeaderMenu] = useState<number | null>(null);
 
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (selectorRef.current && !selectorRef.current.contains(event.target as Node)) {
-        setIsColumnSelectorOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+  const managerPanelRef = useRef<HTMLDivElement>(null);
+  const settingsPanelRef = useRef<HTMLDivElement>(null);
 
-  // Compute column metadata for all columns in rawData
+  // Compute all column metadata from rawData
   const allColumns = useMemo<ColumnMeta[]>(() => {
     if (!rawData || rawData.length === 0) return [];
 
     const effectiveHeaderIdx = headerRowIndex >= 0 ? headerRowIndex : 0;
     const headerRow = rawData[effectiveHeaderIdx] || [];
 
-    // Determine max columns across header and data rows
     let maxCols = headerRow.length;
     for (let r = effectiveHeaderIdx + 1; r < rawData.length; r++) {
       if (rawData[r] && rawData[r].length > maxCols) {
@@ -118,48 +154,71 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
       const lowerHeader = headerName.toLowerCase();
       const isDefaultByName = DEFAULT_VISIBLE_KEYWORDS.some(k => lowerHeader.includes(k));
 
+      // Calculate non-empty cell count
+      let nonEmptyCount = 0;
+      for (let r = effectiveHeaderIdx + 1; r < rawData.length; r++) {
+        const val = rawData[r]?.[c];
+        if (val !== undefined && val !== null && String(val).trim() !== '') {
+          nonEmptyCount++;
+        }
+      }
+
       columns.push({
         index: c,
         letter,
         headerName,
-        isDefault: isDefaultByLetter || isDefaultByName
+        isDefault: isDefaultByLetter || isDefaultByName,
+        nonEmptyCount
       });
     }
 
     return columns;
   }, [rawData, headerRowIndex]);
 
-  // Initial default visible column indices
-  const defaultColIndices = useMemo(() => {
-    const set = new Set<number>();
+  // Default visible column order
+  const defaultColOrder = useMemo(() => {
+    const list: number[] = [];
     allColumns.forEach(col => {
-      if (col.isDefault) set.add(col.index);
+      if (col.isDefault) list.push(col.index);
     });
-    // Fallback: if no defaults match, enable first 8 columns
-    if (set.size === 0 && allColumns.length > 0) {
-      allColumns.slice(0, 8).forEach(col => set.add(col.index));
+    if (list.length === 0 && allColumns.length > 0) {
+      allColumns.slice(0, 8).forEach(col => list.push(col.index));
     }
-    return set;
+    return list;
   }, [allColumns]);
 
-  const [visibleIndices, setVisibleIndices] = useState<Set<number>>(() => new Set(defaultColIndices));
+  // Current visible columns in user-defined order
+  const [columnOrder, setColumnOrder] = useState<number[]>(() => defaultColOrder);
 
-  // Reset to default columns whenever new file is loaded
+  // Sync when dataset changes
   useEffect(() => {
-    setVisibleIndices(new Set(defaultColIndices));
-  }, [defaultColIndices]);
+    setColumnOrder(defaultColOrder);
+    setColumnWidths({});
+    setSortConfig({ colIndex: null, direction: null });
+    setCurrentPage(1);
+    setSelectedCell(null);
+  }, [defaultColOrder]);
 
-  // Map validation flags by originalRowIndex
+  const visibleColumnSet = useMemo(() => new Set(columnOrder), [columnOrder]);
+
+  // Validation map
   const validationMap = useMemo(() => {
-    const map = new Map<number, string>();
+    const map = new Map<number, { isError: boolean; isWarning: boolean; reasons: string[] }>();
     dataValidationFlags.forEach(flag => {
-      map.set(flag.originalRowIndex, flag.reason);
+      const reasons = flag.reason ? flag.reason.split('|||') : [];
+      const hasErrors = reasons.some(r => !r.startsWith('[WARNING]'));
+      const hasWarnings = reasons.some(r => r.startsWith('[WARNING]'));
+      map.set(flag.originalRowIndex, {
+        isError: hasErrors,
+        isWarning: hasWarnings,
+        reasons
+      });
     });
     return map;
   }, [dataValidationFlags]);
 
-  // Extract data rows (preserving exact uploaded order)
-  const dataRows = useMemo(() => {
+  // Extract valid data rows
+  const allDataRows = useMemo(() => {
     if (!rawData || rawData.length === 0) return [];
     const startIdx = headerRowIndex >= 0 ? headerRowIndex + 1 : 0;
     
@@ -179,120 +238,317 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
     return rows;
   }, [rawData, headerRowIndex]);
 
-  // Filter rows by search query
+  // Filtered rows (search query + status filter)
   const filteredRows = useMemo(() => {
-    if (!searchQuery.trim()) return dataRows;
-    const query = searchQuery.toLowerCase();
-    return dataRows.filter(rowObj => {
-      return rowObj.data.some((cell, colIdx) => {
-        if (!visibleIndices.has(colIdx)) return false;
-        if (cell === null || cell === undefined) return false;
-        return String(cell).toLowerCase().includes(query);
+    let result = allDataRows;
+
+    // Filter by issue status
+    if (statusFilter !== 'all') {
+      result = result.filter(rowObj => {
+        const val = validationMap.get(rowObj.originalRowIndex);
+        if (statusFilter === 'issues') return !!val && (val.isError || val.isWarning);
+        if (statusFilter === 'errors') return !!val && val.isError;
+        if (statusFilter === 'warnings') return !!val && !val.isError && val.isWarning;
+        return true;
       });
-    });
-  }, [dataRows, searchQuery, visibleIndices]);
+    }
 
-  const visibleColumnsList = useMemo(() => {
-    return allColumns.filter(col => visibleIndices.has(col.index));
-  }, [allColumns, visibleIndices]);
+    // Filter by search query
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      result = result.filter(rowObj => {
+        return rowObj.data.some((cell, colIdx) => {
+          if (!visibleColumnSet.has(colIdx)) return false;
+          if (cell === null || cell === undefined) return false;
+          return String(cell).toLowerCase().includes(query);
+        });
+      });
+    }
 
-  // Column toggle handlers
-  const toggleColumn = (colIndex: number) => {
-    setVisibleIndices(prev => {
-      const next = new Set(prev);
-      if (next.has(colIndex)) {
-        if (next.size > 1) { // keep at least 1 column
-          next.delete(colIndex);
+    // Sort if active
+    if (sortConfig.colIndex !== null && sortConfig.direction !== null) {
+      const colIdx = sortConfig.colIndex;
+      const dir = sortConfig.direction === 'asc' ? 1 : -1;
+
+      result = [...result].sort((a, b) => {
+        const valA = a.data[colIdx];
+        const valB = b.data[colIdx];
+
+        if (valA === undefined || valA === null) return 1;
+        if (valB === undefined || valB === null) return -1;
+
+        const numA = Number(valA);
+        const numB = Number(valB);
+
+        if (!isNaN(numA) && !isNaN(numB)) {
+          return (numA - numB) * dir;
         }
+
+        return String(valA).localeCompare(String(valB), undefined, { numeric: true, sensitivity: 'base' }) * dir;
+      });
+    }
+
+    return result;
+  }, [allDataRows, statusFilter, searchQuery, visibleColumnSet, sortConfig, validationMap]);
+
+  // Pagination calculation
+  const totalPages = useMemo(() => {
+    if (pageSize === 'all') return 1;
+    return Math.max(1, Math.ceil(filteredRows.length / pageSize));
+  }, [filteredRows.length, pageSize]);
+
+  const paginatedRows = useMemo(() => {
+    if (pageSize === 'all') return filteredRows;
+    const start = (currentPage - 1) * pageSize;
+    return filteredRows.slice(start, start + pageSize);
+  }, [filteredRows, currentPage, pageSize]);
+
+  // Reset page when filter changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, statusFilter, pageSize, sortConfig]);
+
+  // Visible column metadata list in custom order
+  const orderedVisibleColumns = useMemo(() => {
+    const metaMap = new Map<number, ColumnMeta>();
+    allColumns.forEach(c => metaMap.set(c.index, c));
+    return columnOrder.map(idx => metaMap.get(idx)).filter((c): c is ColumnMeta => !!c);
+  }, [allColumns, columnOrder]);
+
+  // Column Resizing logic
+  const handleMouseDownResize = (e: React.MouseEvent, colIndex: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const currentWidth = columnWidths[colIndex] || getDefaultColWidth(colIndex);
+    setResizingCol({
+      index: colIndex,
+      startX: e.clientX,
+      startWidth: currentWidth
+    });
+  };
+
+  useEffect(() => {
+    if (!resizingCol) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = e.clientX - resizingCol.startX;
+      // Allow columns to be reduced down to 36px without artificial constraints!
+      const newWidth = Math.max(36, Math.min(900, Math.round(resizingCol.startWidth + deltaX)));
+      setColWidthPreset('custom');
+      setColumnWidths(prev => ({
+        ...prev,
+        [resizingCol.index]: newWidth
+      }));
+    };
+
+    const handleMouseUp = () => {
+      setResizingCol(null);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [resizingCol]);
+
+  // Default width calculation - purely based on expected data types, NOT header text length!
+  const getDefaultColWidth = useCallback((colIndex: number): number => {
+    const col = allColumns.find(c => c.index === colIndex);
+    if (!col) return 140;
+    // Standard data field sizing
+    if (col.letter === 'H') return 70;  // Page Number
+    if (col.letter === 'B') return 130; // Usage
+    if (col.letter === 'D') return 120; // Image No
+    if (col.letter === 'E') return 150; // Source
+    if (col.letter === 'C') return 190; // Description
+    if (col.letter === 'G') return 240; // Acknowledgements
+    if (col.letter === 'Q') return 160; // Notes
+    return 130; // Clean neutral width, completely free from header length
+  }, [allColumns]);
+
+  // Auto-fit column based STRICTLY on row cell data contents (ignoring header title completely)
+  const calculateContentFitWidth = useCallback((colIndex: number): number => {
+    let maxCharLen = 0;
+    // Sample first 100 rows of data
+    const sampleRows = allDataRows.slice(0, 100);
+    sampleRows.forEach(r => {
+      const val = r.data[colIndex];
+      if (val !== undefined && val !== null) {
+        const str = String(val).trim();
+        if (str.length > maxCharLen) {
+          maxCharLen = str.length;
+        }
+      }
+    });
+
+    if (maxCharLen === 0) {
+      return 50; // purely enough for column letter
+    }
+
+    // Purely based on data character count:
+    // e.g. 2 chars (page "12") -> 52px
+    // 6 chars ("Photos") -> 82px
+    // 20 chars -> 190px
+    // min 45px, max 450px
+    return Math.max(45, Math.min(450, Math.round(maxCharLen * 7.5 + 36)));
+  }, [allDataRows]);
+
+  // Auto-fit single column strictly to data content
+  const handleAutoFitColumn = (colIndex: number) => {
+    const fitWidth = calculateContentFitWidth(colIndex);
+    setColumnWidths(prev => ({
+      ...prev,
+      [colIndex]: fitWidth
+    }));
+  };
+
+  // Auto-fit all visible columns strictly to data content
+  const handleAutoFitAllColumns = () => {
+    const updated: Record<number, number> = {};
+    orderedVisibleColumns.forEach(col => {
+      updated[col.index] = calculateContentFitWidth(col.index);
+    });
+    setColumnWidths(updated);
+  };
+
+  // Preset Column Widths
+  const handleSetGlobalWidthPreset = (width: number) => {
+    const updated: Record<number, number> = {};
+    orderedVisibleColumns.forEach(col => {
+      updated[col.index] = width;
+    });
+    setColumnWidths(updated);
+  };
+
+  const handleResetWidths = () => {
+    setColumnWidths({});
+  };
+
+  // Calculate strict total table width so browser does not force-stretch narrow columns
+  const totalTableWidth = useMemo(() => {
+    const rowNumWidth = 56;
+    const colsWidth = orderedVisibleColumns.reduce((sum, col) => {
+      const w = columnWidths[col.index] !== undefined ? columnWidths[col.index] : getDefaultColWidth(col.index);
+      return sum + w;
+    }, 0);
+    return rowNumWidth + colsWidth;
+  }, [orderedVisibleColumns, columnWidths, getDefaultColWidth]);
+
+  // Column reordering
+  const handleMoveColumn = (colIndex: number, direction: 'left' | 'right') => {
+    setColumnOrder(prev => {
+      const idx = prev.indexOf(colIndex);
+      if (idx === -1) return prev;
+      const nextIdx = direction === 'left' ? idx - 1 : idx + 1;
+      if (nextIdx < 0 || nextIdx >= prev.length) return prev;
+
+      const nextOrder = [...prev];
+      const temp = nextOrder[idx];
+      nextOrder[idx] = nextOrder[nextIdx];
+      nextOrder[nextIdx] = temp;
+      return nextOrder;
+    });
+  };
+
+  // Column visibility toggling
+  const handleToggleColumn = (colIndex: number) => {
+    setColumnOrder(prev => {
+      if (prev.includes(colIndex)) {
+        if (prev.length <= 1) return prev; // Keep at least one
+        return prev.filter(idx => idx !== colIndex);
       } else {
-        next.add(colIndex);
+        // Find natural position
+        return [...prev, colIndex].sort((a, b) => a - b);
       }
-      return next;
     });
   };
 
-  const handleSelectDefault = () => {
-    setVisibleIndices(new Set(defaultColIndices));
+  const handleSelectDefaultColumns = () => {
+    setColumnOrder(defaultColOrder);
   };
 
-  const handleSelectAll = () => {
-    const all = new Set<number>();
-    allColumns.forEach(c => all.add(c.index));
-    setVisibleIndices(all);
+  const handleSelectAllColumns = () => {
+    setColumnOrder(allColumns.map(c => c.index));
   };
 
-  const handleDeselectAll = () => {
-    if (allColumns.length > 0) {
-      setVisibleIndices(new Set([allColumns[0].index]));
+  const handleSelectNonEmptyColumns = () => {
+    const nonEmpty = allColumns.filter(c => c.nonEmptyCount > 0).map(c => c.index);
+    if (nonEmpty.length > 0) {
+      setColumnOrder(nonEmpty);
     }
   };
 
-  // --- CELL EDITING LOGIC ---
-  const handleStartCellEdit = (originalRowIndex: number, colIndex: number, currentVal: any) => {
-    setEditingCell({ rowIndex: originalRowIndex, colIndex });
-    setEditValue(currentVal !== undefined && currentVal !== null ? String(currentVal) : '');
+  const handleHideColumn = (colIndex: number) => {
+    if (columnOrder.length > 1) {
+      setColumnOrder(prev => prev.filter(idx => idx !== colIndex));
+    }
+    setActiveHeaderMenu(null);
   };
 
-  const handleSaveCellEdit = () => {
-    if (!editingCell || !onRawDataChange) {
-      setEditingCell(null);
-      return;
-    }
+  // Sorting handlers
+  const handleSortColumn = (colIndex: number) => {
+    setSortConfig(prev => {
+      if (prev.colIndex !== colIndex) {
+        return { colIndex, direction: 'asc' };
+      }
+      if (prev.direction === 'asc') {
+        return { colIndex, direction: 'desc' };
+      }
+      return { colIndex: null, direction: null };
+    });
+  };
 
-    const { rowIndex, colIndex } = editingCell;
-    const updatedRaw = rawData.map((rowArr, rIdx) => {
-      if (rIdx === rowIndex) {
-        const newRow = [...rowArr];
-        // Ensure array length covers colIndex
-        while (newRow.length <= colIndex) {
-          newRow.push('');
+  // Row inspection
+  const inspectedRow = useMemo(() => {
+    if (inspectedRowIndex === null) return null;
+    return allDataRows[inspectedRowIndex] ?? null;
+  }, [allDataRows, inspectedRowIndex]);
+
+  const currentDisplayIndex = useMemo(() => {
+    if (inspectedRowIndex === null) return -1;
+    return filteredRows.findIndex(r => r.originalRowIndex === allDataRows[inspectedRowIndex]?.originalRowIndex);
+  }, [allDataRows, filteredRows, inspectedRowIndex]);
+
+  const handleInspectRowByNumber = (excelRowNum: number) => {
+    const rowIdx = allDataRows.findIndex(r => r.excelRowNumber === excelRowNum);
+    if (rowIdx !== -1) {
+      setInspectedRowIndex(rowIdx);
+    }
+  };
+
+  // Jump to row
+  const handleJumpToRow = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const rowNum = parseInt(jumpRowInput.trim(), 10);
+    if (isNaN(rowNum)) return;
+
+    // Check if row is in filtered set
+    const inFilteredIndex = filteredRows.findIndex(r => r.excelRowNumber === rowNum);
+    if (inFilteredIndex !== -1) {
+      if (pageSize !== 'all') {
+        const targetPage = Math.floor(inFilteredIndex / pageSize) + 1;
+        setCurrentPage(targetPage);
+      }
+      setTimeout(() => {
+        const el = document.getElementById(`sheet-row-${rowNum}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          el.classList.add('bg-blue-100', 'ring-2', 'ring-blue-400');
+          setTimeout(() => {
+            el.classList.remove('bg-blue-100', 'ring-2', 'ring-blue-400');
+          }, 2000);
         }
-        newRow[colIndex] = editValue;
-        return newRow;
-      }
-      return rowArr;
-    });
-
-    onRawDataChange(updatedRaw);
-    setEditingCell(null);
-  };
-
-  const handleKeyDownEdit = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSaveCellEdit();
-    } else if (e.key === 'Escape') {
-      setEditingCell(null);
+      }, 100);
     }
   };
 
-  // --- ROW ADDITION & DELETION LOGIC ---
-  const handleAddRow = () => {
-    if (!onRawDataChange) return;
-    const maxCols = allColumns.length || 20;
-    const newEmptyRow = new Array(maxCols).fill('');
-    const updatedRaw = [...rawData, newEmptyRow];
-    onRawDataChange(updatedRaw);
-
-    // Start editing first visible cell of new row
-    const newRowIdx = updatedRaw.length - 1;
-    const firstColIdx = visibleColumnsList.length > 0 ? visibleColumnsList[0].index : 0;
-    handleStartCellEdit(newRowIdx, firstColIdx, '');
-  };
-
-  const handleDeleteRow = (originalRowIndex: number) => {
-    if (!onRawDataChange) return;
-    if (window.confirm(`Are you sure you want to delete row #${originalRowIndex + 1}?`)) {
-      const updatedRaw = rawData.filter((_, idx) => idx !== originalRowIndex);
-      onRawDataChange(updatedRaw);
-    }
-  };
-
-  // Copy visible data as TSV
+  // Export handlers
   const handleCopyTSV = () => {
-    const headerLine = visibleColumnsList.map(c => `${c.letter}: ${c.headerName}`).join('\t');
+    const headerLine = orderedVisibleColumns.map(c => `${c.letter}: ${c.headerName}`).join('\t');
     const rowLines = filteredRows.map(rObj => {
-      return visibleColumnsList.map(c => String(rObj.data[c.index] ?? '').trim()).join('\t');
+      return orderedVisibleColumns.map(c => String(rObj.data[c.index] ?? '').trim()).join('\t');
     });
     const content = [headerLine, ...rowLines].join('\n');
 
@@ -304,355 +560,991 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
     });
   };
 
-  // Download visible data as Excel
   const handleDownloadExcel = () => {
     try {
       // @ts-ignore
       const XLSX = window.XLSX;
       if (!XLSX) return;
 
-      const headers = visibleColumnsList.map(c => `${c.letter}: ${c.headerName}`);
+      const headers = orderedVisibleColumns.map(c => `${c.letter}: ${c.headerName}`);
       const rows = filteredRows.map(rObj => {
-        return visibleColumnsList.map(c => String(rObj.data[c.index] ?? '').trim());
+        return orderedVisibleColumns.map(c => String(rObj.data[c.index] ?? '').trim());
       });
 
       const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
       const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Uploaded Log");
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Uploaded Sheet");
 
-      const outName = fileName ? `Uploaded_Log_${fileName.replace(/\.[^/.]+$/, "")}.xlsx` : "Uploaded_Log_Original_Order.xlsx";
+      const outName = fileName ? `Sheet_${fileName.replace(/\.[^/.]+$/, "")}.xlsx` : "Uploaded_Sheet.xlsx";
       XLSX.writeFile(workbook, outName);
     } catch (e) {
       console.error("Export failed", e);
     }
   };
 
+  const handleCopyActiveCell = () => {
+    if (!selectedCell) return;
+    navigator.clipboard.writeText(selectedCell.value).then(() => {
+      setCellCopyStatus('copied');
+      setTimeout(() => setCellCopyStatus('idle'), 2000);
+    });
+  };
+
+  // Density classes for rows and cells
+  const getDensityRowClasses = () => {
+    switch (rowDensity) {
+      case 'compact':
+        return 'h-7 max-h-7 leading-7';
+      case 'standard':
+        return 'h-9 max-h-9 leading-9';
+      case 'comfortable':
+        return 'min-h-[52px] py-1.5 leading-normal';
+      case 'wrap':
+        return 'min-h-[44px] py-2 leading-relaxed';
+    }
+  };
+
+  const getDensityCellClasses = () => {
+    switch (rowDensity) {
+      case 'compact':
+        return 'whitespace-nowrap overflow-hidden text-ellipsis';
+      case 'standard':
+        return 'whitespace-nowrap overflow-hidden text-ellipsis';
+      case 'comfortable':
+        return 'line-clamp-2 overflow-hidden';
+      case 'wrap':
+        return 'whitespace-normal break-words';
+    }
+  };
+
+  const getFontSizeClass = () => {
+    switch (fontSize) {
+      case 'small': return 'text-[11px]';
+      case 'medium': return 'text-xs';
+      case 'large': return 'text-[13px]';
+    }
+  };
+
+  // Close menus when clicking outside
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.header-menu-container') && activeHeaderMenu !== null) {
+        setActiveHeaderMenu(null);
+      }
+      if (!target.closest('.view-settings-container') && isViewSettingsOpen) {
+        setIsViewSettingsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [activeHeaderMenu, isViewSettingsOpen]);
+
+  // Filter columns inside manager
+  const managerFilteredColumns = useMemo(() => {
+    if (!colSearchQuery.trim()) return allColumns;
+    const q = colSearchQuery.toLowerCase();
+    return allColumns.filter(c => c.letter.toLowerCase().includes(q) || c.headerName.toLowerCase().includes(q));
+  }, [allColumns, colSearchQuery]);
+
   return (
-    <div className="animate-fade-in flex flex-col gap-3">
-      {/* Sync Status Banner */}
-      <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md text-white flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="bg-blue-600/30 text-blue-400 p-2.5 rounded-xl border border-blue-500/30">
-            <Cloud className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-bold text-white">
-                Uploaded Log Editor & Online Sync
-              </h2>
-              {unsavedChangesCount > 0 ? (
-                <span className="text-[11px] bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1 animate-pulse">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-                  {unsavedChangesCount} Unsaved Local Edit(s)
-                </span>
-              ) : (
-                <span className="text-[11px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                  Synced with Online Source
-                </span>
-              )}
+    <div 
+      ref={containerRef}
+      className={`animate-fade-in flex flex-col gap-2 flex-1 min-h-0 h-full overflow-hidden w-full ${
+        isFullscreen ? 'fixed inset-0 z-50 bg-slate-100 p-4' : ''
+      }`}
+    >
+      {/* ========================================================================= */}
+      {/* 1. TOP POWER TOOLBAR: Search, Columns, Row Height, Widths, Export, View   */}
+      {/* ========================================================================= */}
+      <div className="bg-white border border-slate-200 rounded-xl px-3 py-2 shadow-xs flex flex-wrap items-center justify-between gap-2.5 flex-shrink-0 w-full">
+        {/* Left Side: Summary & Quick Search */}
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <div className="flex items-center gap-1.5 text-xs text-slate-700">
+            <div className="p-1 bg-blue-50 text-blue-600 rounded-md">
+              <FileSpreadsheet className="w-4 h-4 shrink-0" />
             </div>
-            <p className="text-xs text-slate-300 mt-0.5">
-              Double-click any cell to edit &bull; Edits sync across all views (Credits Creator &amp; Contact Sheets) &bull; Export Excel or Copy TSV to save back to Excel Online
-            </p>
+            <span>
+              Showing <strong className="font-bold text-slate-900 tabular-nums">{filteredRows.length}</strong> of{' '}
+              <span className="text-slate-500 tabular-nums">{allDataRows.length} rows</span>
+            </span>
           </div>
-        </div>
 
-        {/* Sync & Action Buttons */}
-        <div className="flex items-center gap-2">
-          {onOpenSyncModal && (
-            <button
-              onClick={onOpenSyncModal}
-              className={`flex items-center gap-2 px-3.5 py-2 font-bold text-xs rounded-xl shadow-md transition-all ${
-                unsavedChangesCount > 0
-                  ? 'bg-amber-500 hover:bg-amber-600 text-slate-950'
-                  : 'bg-blue-600 hover:bg-blue-500 text-white'
-              }`}
-            >
-              <RefreshIcon className="w-4 h-4" />
-              <span>{unsavedChangesCount > 0 ? 'Sync Changes to Online File' : 'Sync Manager'}</span>
-            </button>
-          )}
-
-          <button
-            onClick={handleAddRow}
-            className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-colors"
-            title="Add a new row to the original log"
-          >
-            <Plus className="w-3.5 h-3.5 text-blue-400" />
-            <span>Add Row</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Top Controls Bar */}
-      <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 shadow-sm flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <p className="text-xs text-slate-500">
-            Showing <strong className="text-slate-800">{filteredRows.length}</strong> of <strong className="text-slate-800">{dataRows.length}</strong> rows
-          </p>
-        </div>
-
-        {/* Action Controls */}
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Search Box */}
-          <div className="relative min-w-[200px]">
+          {/* Quick Search Box */}
+          <div className="relative min-w-[200px] sm:min-w-[240px]">
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search uploaded rows..."
-              className="w-full text-xs border border-slate-300 rounded-lg pl-8 pr-8 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white shadow-sm"
+              placeholder="Search in visible columns..."
+              className="w-full text-xs border border-slate-300 rounded-lg pl-7 pr-7 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 bg-white shadow-2xs placeholder:text-slate-400"
             />
-            <svg className="w-4 h-4 text-slate-400 absolute left-2.5 top-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-600"
+                className="absolute right-2 top-2 text-slate-400 hover:text-slate-600 p-0.5 rounded"
+                title="Clear search"
               >
-                <CloseIcon className="w-3.5 h-3.5" />
+                <CloseIcon className="w-3 h-3" />
               </button>
             )}
           </div>
 
-          {/* Column Visibility Selector Dropdown */}
-          <div className="relative" ref={selectorRef}>
+          {/* Issues / Status Filter Segments */}
+          <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200/80">
             <button
-              onClick={() => setIsColumnSelectorOpen(!isColumnSelectorOpen)}
-              className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm transition-colors"
+              onClick={() => setStatusFilter('all')}
+              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                statusFilter === 'all' ? 'bg-white text-slate-900 shadow-2xs font-semibold' : 'text-slate-600 hover:text-slate-900'
+              }`}
             >
-              <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
-              </svg>
-              <span>Columns ({visibleIndices.size}/{allColumns.length})</span>
-              <ChevronDownIcon className={`w-3.5 h-3.5 transition-transform ${isColumnSelectorOpen ? 'rotate-180' : ''}`} />
+              All
+            </button>
+            <button
+              onClick={() => setStatusFilter('issues')}
+              className={`px-2 py-1 text-xs font-medium rounded-md transition-colors flex items-center gap-1 ${
+                statusFilter === 'issues' ? 'bg-white text-red-700 shadow-2xs font-semibold' : 'text-slate-600 hover:text-red-700'
+              }`}
+              title="Filter rows with errors or warnings"
+            >
+              <AlertTriangle className="w-3 h-3 text-amber-500" />
+              <span>Issues</span>
+              {dataValidationFlags.length > 0 && (
+                <span className="text-[10px] font-mono font-bold bg-red-100 text-red-700 px-1 rounded-full">
+                  {dataValidationFlags.length}
+                </span>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Right Side: View Customizations, Columns, Height, Width, Export */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Jump to Row */}
+          <form onSubmit={handleJumpToRow} className="flex items-center gap-1">
+            <input
+              type="number"
+              min="1"
+              max={rawData.length}
+              value={jumpRowInput}
+              onChange={(e) => setJumpRowInput(e.target.value)}
+              placeholder="Row #"
+              className="w-16 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-1.5 focus:ring-blue-500 bg-white shadow-2xs text-center tabular-nums"
+              title="Enter Excel row number to scroll directly to it"
+            />
+            <button
+              type="submit"
+              className="p-1.5 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg text-slate-600 shadow-2xs transition-colors"
+              title="Jump to row"
+            >
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </form>
+
+          <div className="h-4 w-px bg-slate-200" />
+
+          {/* Row Height & Density Switcher */}
+          <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200" title="Customize row height / wrapping">
+            <span className="text-[10px] font-bold text-slate-500 uppercase px-1.5 select-none">Rows:</span>
+            <button
+              onClick={() => setRowDensity('compact')}
+              className={`px-2 py-1 text-xs font-medium rounded-md transition-colors ${
+                rowDensity === 'compact' ? 'bg-white text-slate-900 shadow-2xs font-semibold' : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="Compact rows (28px height, maximum data density)"
+            >
+              Tight
+            </button>
+            <button
+              onClick={() => setRowDensity('standard')}
+              className={`px-2 py-1 text-xs font-medium rounded-md transition-colors ${
+                rowDensity === 'standard' ? 'bg-white text-slate-900 shadow-2xs font-semibold' : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="Standard rows (38px height, balanced)"
+            >
+              Normal
+            </button>
+            <button
+              onClick={() => setRowDensity('comfortable')}
+              className={`px-2 py-1 text-xs font-medium rounded-md transition-colors ${
+                rowDensity === 'comfortable' ? 'bg-white text-slate-900 shadow-2xs font-semibold' : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="Comfortable preview (52px height, 2-line preview)"
+            >
+              Relaxed
+            </button>
+            <button
+              onClick={() => setRowDensity('wrap')}
+              className={`px-2 py-1 text-xs font-medium rounded-md transition-colors flex items-center gap-1 ${
+                rowDensity === 'wrap' ? 'bg-blue-600 text-white shadow-2xs font-semibold' : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="Full Text Wrap: Displays complete acknowledgements and citations without truncation!"
+            >
+              <WrapText className="w-3.5 h-3.5" />
+              <span>Wrap</span>
+            </button>
+          </div>
+
+          {/* Column Width Switcher */}
+          <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200" title="Customize column widths">
+            <span className="text-[10px] font-bold text-slate-500 uppercase px-1.5 select-none">Cols:</span>
+            <button
+              onClick={() => {
+                setColWidthPreset('tight');
+                handleSetGlobalWidthPreset(75);
+              }}
+              className={`px-2 py-1 text-xs font-medium rounded-md transition-colors ${
+                colWidthPreset === 'tight' ? 'bg-white text-slate-900 shadow-2xs font-semibold' : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="Tight columns (75px width, max columns in view)"
+            >
+              Tight
+            </button>
+            <button
+              onClick={() => {
+                setColWidthPreset('normal');
+                handleSetGlobalWidthPreset(140);
+              }}
+              className={`px-2 py-1 text-xs font-medium rounded-md transition-colors ${
+                colWidthPreset === 'normal' ? 'bg-white text-slate-900 shadow-2xs font-semibold' : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="Normal balanced column width (140px)"
+            >
+              Normal
+            </button>
+            <button
+              onClick={() => {
+                setColWidthPreset('wide');
+                handleSetGlobalWidthPreset(250);
+              }}
+              className={`px-2 py-1 text-xs font-medium rounded-md transition-colors ${
+                colWidthPreset === 'wide' ? 'bg-white text-slate-900 shadow-2xs font-semibold' : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="Wide columns (250px)"
+            >
+              Wide
+            </button>
+            <button
+              onClick={() => {
+                setColWidthPreset('fit');
+                handleAutoFitAllColumns();
+              }}
+              className={`px-2 py-1 text-xs font-medium rounded-md transition-colors flex items-center gap-1 ${
+                colWidthPreset === 'fit' ? 'bg-blue-600 text-white shadow-2xs font-semibold' : 'text-blue-700 hover:bg-blue-50'
+              }`}
+              title="Fit column widths strictly to row cell content (completely ignores header length)"
+            >
+              <SlidersHorizontal className={`w-3 h-3 ${colWidthPreset === 'fit' ? 'text-white' : 'text-blue-600'}`} />
+              <span>Fit Data</span>
+            </button>
+          </div>
+
+          {/* Column Customizer Toggle */}
+          <button
+            onClick={() => setIsColumnManagerOpen(!isColumnManagerOpen)}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 border rounded-lg text-xs font-semibold shadow-2xs transition-colors ${
+              isColumnManagerOpen
+                ? 'bg-blue-600 text-white border-blue-600'
+                : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+            }`}
+            title="Open column visibility and reordering options"
+          >
+            <SlidersHorizontal className="w-3.5 h-3.5" />
+            <span>Columns ({orderedVisibleColumns.length}/{allColumns.length})</span>
+            <ChevronDownIcon className={`w-3 h-3 transition-transform ${isColumnManagerOpen ? 'rotate-180' : ''}`} />
+          </button>
+
+          {/* View Options Menu (Freeze, Font size, Gridlines, Zebra) */}
+          <div className="relative view-settings-container">
+            <button
+              onClick={() => setIsViewSettingsOpen(!isViewSettingsOpen)}
+              className={`p-1.5 border rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-50 shadow-2xs transition-colors ${
+                isViewSettingsOpen ? 'bg-slate-100 border-slate-400' : 'bg-white border-slate-300'
+              }`}
+              title="View settings: Freeze columns, font size, gridlines, auto-fit widths"
+            >
+              <Settings2 className="w-4 h-4" />
             </button>
 
-            {/* Selector Popover */}
-            {isColumnSelectorOpen && (
-              <div className="absolute right-0 mt-2 w-80 bg-white border border-slate-200 rounded-xl shadow-xl z-30 p-3 animate-fade-in-fast">
-                <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
-                  <span className="text-xs font-bold text-slate-800">Customize Visible Columns</span>
-                  <button
-                    onClick={() => setIsColumnSelectorOpen(false)}
-                    className="text-slate-400 hover:text-slate-600 p-0.5 rounded"
+            {isViewSettingsOpen && (
+              <div 
+                ref={settingsPanelRef}
+                className="absolute right-0 top-full mt-1.5 w-64 bg-white border border-slate-200 rounded-xl shadow-xl p-3 z-40 text-xs animate-fade-in-fast"
+              >
+                <div className="font-bold text-slate-800 pb-2 mb-2 border-b border-slate-100 flex items-center justify-between">
+                  <span>Display Customization</span>
+                  <button 
+                    onClick={() => setIsViewSettingsOpen(false)} 
+                    className="text-slate-400 hover:text-slate-600"
                   >
-                    <CloseIcon className="w-4 h-4" />
+                    &times;
                   </button>
                 </div>
 
-                {/* Quick Selection Presets */}
-                <div className="flex items-center justify-between gap-1 mb-2.5">
-                  <button
-                    onClick={handleSelectDefault}
-                    className="text-[11px] font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 px-2 py-1 rounded transition-colors"
-                    title="Shows B, C, D, E, F, G, H, Q"
-                  >
-                    Default (B,C,D,E,F,G,H,Q)
-                  </button>
-                  <button
-                    onClick={handleSelectAll}
-                    className="text-[11px] font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded transition-colors"
-                  >
-                    Select All
-                  </button>
-                  <button
-                    onClick={handleDeselectAll}
-                    className="text-[11px] font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded transition-colors"
-                  >
-                    Reset
-                  </button>
-                </div>
-
-                {/* Column Checkboxes List */}
-                <div className="max-h-60 overflow-y-auto space-y-1 pr-1 text-xs">
-                  {allColumns.map(col => {
-                    const isChecked = visibleIndices.has(col.index);
-                    return (
-                      <label
-                        key={col.index}
-                        className={`flex items-center justify-between p-1.5 rounded cursor-pointer transition-colors ${isChecked ? 'bg-blue-50 text-slate-900' : 'hover:bg-slate-50 text-slate-600'}`}
+                <div className="space-y-3">
+                  {/* Column Width Presets */}
+                  <div>
+                    <span className="text-[11px] font-semibold text-slate-500 block mb-1.5">Column Widths</span>
+                    <div className="grid grid-cols-2 gap-1">
+                      <button
+                        onClick={handleAutoFitAllColumns}
+                        className="px-2 py-1 rounded bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-left font-medium transition-colors"
                       >
-                        <div className="flex items-center gap-2 min-w-0 pr-2">
-                          <input
-                            type="checkbox"
-                            checked={isChecked}
-                            onChange={() => toggleColumn(col.index)}
-                            className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5"
-                          />
-                          <span className={`font-mono font-bold text-[11px] px-1.5 py-0.5 rounded ${col.isDefault ? 'bg-blue-100 text-blue-800' : 'bg-slate-200 text-slate-700'}`}>
-                            {col.letter}
-                          </span>
-                          <span className="truncate text-xs font-medium" title={col.headerName}>
-                            {col.headerName}
-                          </span>
-                        </div>
-                        {col.isDefault && (
-                          <span className="text-[10px] text-blue-600 font-bold uppercase tracking-wider flex-shrink-0">
-                            Default
-                          </span>
-                        )}
-                      </label>
-                    );
-                  })}
+                        Auto-Fit All
+                      </button>
+                      <button
+                        onClick={handleResetWidths}
+                        className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-left font-medium transition-colors"
+                      >
+                        Reset Widths
+                      </button>
+                      <button
+                        onClick={() => handleSetGlobalWidthPreset(140)}
+                        className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-left font-medium transition-colors"
+                      >
+                        Compact (140px)
+                      </button>
+                      <button
+                        onClick={() => handleSetGlobalWidthPreset(280)}
+                        className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-left font-medium transition-colors"
+                      >
+                        Wide (280px)
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Freeze First Column Toggle */}
+                  <label className="flex items-center justify-between p-1.5 rounded hover:bg-slate-50 cursor-pointer">
+                    <div className="flex items-center gap-2">
+                      <Pin className={`w-3.5 h-3.5 ${freezeFirstCol ? 'text-blue-600' : 'text-slate-400'}`} />
+                      <span className="font-medium text-slate-700">Freeze First Column</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={freezeFirstCol}
+                      onChange={(e) => setFreezeFirstCol(e.target.checked)}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5"
+                    />
+                  </label>
+
+                  {/* Zebra Striping Toggle */}
+                  <label className="flex items-center justify-between p-1.5 rounded hover:bg-slate-50 cursor-pointer">
+                    <span className="font-medium text-slate-700">Alternating Row Colors</span>
+                    <input
+                      type="checkbox"
+                      checked={zebraStriping}
+                      onChange={(e) => setZebraStriping(e.target.checked)}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5"
+                    />
+                  </label>
+
+                  {/* Gridlines Toggle */}
+                  <label className="flex items-center justify-between p-1.5 rounded hover:bg-slate-50 cursor-pointer">
+                    <span className="font-medium text-slate-700">Show Full Gridlines</span>
+                    <input
+                      type="checkbox"
+                      checked={showGridlines}
+                      onChange={(e) => setShowGridlines(e.target.checked)}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5"
+                    />
+                  </label>
+
+                  {/* Font Size Selector */}
+                  <div>
+                    <span className="text-[11px] font-semibold text-slate-500 block mb-1">Font Size</span>
+                    <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                      {(['small', 'medium', 'large'] as FontSize[]).map(size => (
+                        <button
+                          key={size}
+                          onClick={() => setFontSize(size)}
+                          className={`flex-1 py-1 capitalize font-medium rounded-md transition-colors ${
+                            fontSize === size ? 'bg-white text-slate-900 shadow-2xs font-semibold' : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          {size}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
           </div>
 
+          {/* Fullscreen Toggle */}
+          <button
+            onClick={() => setIsFullscreen(!isFullscreen)}
+            className="p-1.5 border border-slate-300 bg-white hover:bg-slate-50 rounded-lg text-slate-600 hover:text-slate-900 shadow-2xs transition-colors"
+            title={isFullscreen ? 'Exit Fullscreen' : 'Expand Table Fullscreen'}
+          >
+            {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+          </button>
+
           {/* Copy Button */}
           <button
             onClick={handleCopyTSV}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-100 shadow-sm transition-colors"
-            title="Copy visible columns to clipboard"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-2xs transition-colors"
+            title="Copy visible sheet data to clipboard as TSV"
           >
-            <CopyIcon className="w-3.5 h-3.5 text-slate-500" />
-            <span>{copyStatus === 'copied' ? 'Copied!' : 'Copy TSV'}</span>
+            {copyStatus === 'copied' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <CopyIcon className="w-3.5 h-3.5 text-slate-500" />}
+            <span>{copyStatus === 'copied' ? 'Copied' : 'Copy'}</span>
           </button>
 
           {/* Export Excel Button */}
           <button
             onClick={handleDownloadExcel}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 shadow-sm transition-colors"
-            title="Download visible columns as Excel"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 shadow-2xs transition-colors"
+            title="Download visible columns and rows as Excel (.xlsx)"
           >
             <DownloadIcon className="w-3.5 h-3.5" />
-            <span>Export Excel</span>
+            <span>Excel</span>
           </button>
         </div>
       </div>
 
-      {/* Main Table */}
-      <div className="w-full bg-white rounded-xl border border-slate-200 shadow-md overflow-hidden">
-        <div className="overflow-x-auto max-h-[70vh]">
-          <table className="min-w-full divide-y divide-slate-200 text-xs">
-            <thead className="bg-slate-100 sticky top-0 z-20 shadow-sm">
-              <tr>
-                {/* Row Number Column */}
-                <th scope="col" className="w-12 px-2 py-2 text-center text-[11px] font-bold text-slate-500 uppercase tracking-wider border-r border-slate-200 bg-slate-100">
+      {/* ========================================================================= */}
+      {/* 2. ADVANCED COLUMN MANAGER DRAWER / PANEL: Search, Reorder, Presets        */}
+      {/* ========================================================================= */}
+      {isColumnManagerOpen && (
+        <div ref={managerPanelRef} className="w-full bg-white border border-blue-200 rounded-xl p-3.5 shadow-sm flex-shrink-0 animate-fade-in-fast">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2.5 mb-2.5 border-b border-slate-100">
+            <div className="flex items-center gap-2">
+              <SlidersHorizontal className="w-4 h-4 text-blue-600 shrink-0" />
+              <span className="text-xs font-bold text-slate-900">
+                Customize Visible Columns & Order
+              </span>
+              <span className="text-[11px] font-mono font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
+                {orderedVisibleColumns.length} of {allColumns.length} visible
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Find column input */}
+              <div className="relative min-w-[170px]">
+                <input
+                  type="text"
+                  value={colSearchQuery}
+                  onChange={(e) => setColSearchQuery(e.target.value)}
+                  placeholder="Filter columns..."
+                  className="w-full text-xs border border-slate-200 rounded-lg pl-6 pr-6 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50"
+                />
+                <Search className="w-3 h-3 text-slate-400 absolute left-2 top-2 pointer-events-none" />
+                {colSearchQuery && (
+                  <button
+                    onClick={() => setColSearchQuery('')}
+                    className="absolute right-1.5 top-1 text-slate-400 hover:text-slate-600 text-xs font-bold"
+                  >
+                    &times;
+                  </button>
+                )}
+              </div>
+
+              {/* Presets */}
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={handleSelectDefaultColumns}
+                  className="text-[11px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2.5 py-1 rounded-lg transition-colors shadow-2xs"
+                  title="Reset to Publishing defaults: B, C, D, E, F, G, H, Q"
+                >
+                  Publishing Default
+                </button>
+                <button
+                  onClick={handleSelectNonEmptyColumns}
+                  className="text-[11px] font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-2 py-1 rounded-lg transition-colors shadow-2xs"
+                  title="Show only columns that have at least 1 non-empty value"
+                >
+                  Non-Empty Only
+                </button>
+                <button
+                  onClick={handleSelectAllColumns}
+                  className="text-[11px] font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-2 py-1 rounded-lg transition-colors shadow-2xs"
+                >
+                  All ({allColumns.length})
+                </button>
+              </div>
+
+              <button
+                onClick={() => setIsColumnManagerOpen(false)}
+                className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors ml-1"
+                title="Close"
+              >
+                <CloseIcon className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Columns Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-1.5 max-h-48 overflow-y-auto pr-1">
+            {managerFilteredColumns.map(col => {
+              const isChecked = visibleColumnSet.has(col.index);
+              const orderIdx = columnOrder.indexOf(col.index);
+
+              return (
+                <div
+                  key={col.index}
+                  className={`flex items-center justify-between gap-1.5 p-1.5 rounded-lg border text-xs select-none transition-all ${
+                    isChecked
+                      ? 'bg-blue-50/70 border-blue-300 text-blue-950 font-medium shadow-2xs'
+                      : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
+                  }`}
+                >
+                  <label className="flex items-center gap-1.5 min-w-0 flex-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={() => handleToggleColumn(col.index)}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 shrink-0 cursor-pointer"
+                    />
+                    <span className={`font-mono font-bold text-[10px] px-1 py-0.2 rounded shrink-0 ${
+                      col.isDefault ? 'bg-blue-200 text-blue-900' : 'bg-slate-200 text-slate-700'
+                    }`}>
+                      {col.letter}
+                    </span>
+                    <span className="truncate text-[11px]" title={`${col.headerName} (${col.nonEmptyCount} entries)`}>
+                      {col.headerName}
+                    </span>
+                  </label>
+
+                  {/* Reorder arrows if column is currently visible */}
+                  {isChecked && (
+                    <div className="flex items-center gap-0.5 shrink-0 opacity-60 hover:opacity-100">
+                      <button
+                        onClick={() => handleMoveColumn(col.index, 'left')}
+                        disabled={orderIdx === 0}
+                        className="p-0.5 rounded hover:bg-blue-200 disabled:opacity-20 text-slate-600"
+                        title="Move left"
+                      >
+                        <MoveLeft className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={() => handleMoveColumn(col.index, 'right')}
+                        disabled={orderIdx === columnOrder.length - 1}
+                        className="p-0.5 rounded hover:bg-blue-200 disabled:opacity-20 text-slate-600"
+                        title="Move right"
+                      >
+                        <MoveRight className="w-3 h-3" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Active Columns Strip */}
+          <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px] text-slate-500">
+            <div className="flex items-center gap-1 overflow-x-auto py-0.5 max-w-[80%]">
+              <span className="font-semibold text-slate-600 shrink-0">Active sequence:</span>
+              {orderedVisibleColumns.map((col, idx) => (
+                <span
+                  key={col.index}
+                  className="shrink-0 bg-slate-100 text-slate-700 border border-slate-200 rounded px-1.5 py-0.5 font-mono text-[10px] flex items-center gap-1"
+                >
+                  <strong className="text-blue-700">{col.letter}</strong>: {col.headerName.slice(0, 10)}
+                  {col.headerName.length > 10 ? '..' : ''}
+                  <button
+                    onClick={() => handleToggleColumn(col.index)}
+                    className="hover:text-red-600 text-slate-400 font-bold ml-0.5"
+                    title="Hide column"
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={handleAutoFitAllColumns}
+                className="text-blue-600 hover:text-blue-800 font-medium"
+              >
+                Auto-Fit Widths
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 3. ACTIVE CELL FORMULA & VALUE INSPECTION BAR                            */}
+      {/* ========================================================================= */}
+      <div className="bg-white border border-slate-200 rounded-lg px-3 py-1.5 flex items-center justify-between gap-3 text-xs shadow-2xs min-h-[36px] flex-shrink-0 w-full">
+        {selectedCell ? (
+          <div className="flex items-center gap-2.5 w-full min-w-0">
+            {/* Cell Coordinate Badge */}
+            <span className="shrink-0 bg-blue-100 text-blue-900 font-mono font-bold text-[11px] px-2 py-0.5 rounded border border-blue-200 flex items-center gap-1">
+              <span>Row {selectedCell.excelRowNumber}</span>
+              <span className="text-blue-400">:</span>
+              <span>Col {selectedCell.letter}</span>
+            </span>
+
+            {/* Header Column Name */}
+            <span className="shrink-0 text-slate-600 font-semibold truncate max-w-[150px]" title={selectedCell.headerName}>
+              [{selectedCell.headerName}]
+            </span>
+
+            {/* Unabbreviated Value Preview */}
+            <div className="flex-1 min-w-0 text-slate-900 font-medium truncate select-text" title={selectedCell.value}>
+              {selectedCell.value || <span className="text-slate-300 italic">Empty cell</span>}
+            </div>
+
+            {/* Character & Word count */}
+            {selectedCell.value && (
+              <span className="shrink-0 text-[11px] text-slate-400 font-mono hidden md:inline">
+                {selectedCell.value.length} chars
+              </span>
+            )}
+
+            {/* Validation Notice */}
+            {selectedCell.isError && (
+              <span className="shrink-0 flex items-center gap-1 bg-red-50 text-red-700 text-[11px] font-semibold px-2 py-0.5 rounded border border-red-200">
+                <XCircle className="w-3.5 h-3.5 text-red-500" />
+                <span>Issue in row</span>
+              </span>
+            )}
+            {!selectedCell.isError && selectedCell.isWarning && (
+              <span className="shrink-0 flex items-center gap-1 bg-amber-50 text-amber-700 text-[11px] font-semibold px-2 py-0.5 rounded border border-amber-200">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                <span>Warning</span>
+              </span>
+            )}
+
+            {/* Inspect Entire Row Button */}
+            <button
+              onClick={() => handleInspectRowByNumber(selectedCell.excelRowNumber)}
+              className="shrink-0 text-[11px] font-semibold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 rounded transition-colors"
+              title="Open full row details modal"
+            >
+              Inspect Row
+            </button>
+
+            {/* Copy Cell Value Button */}
+            {selectedCell.value && (
+              <button
+                onClick={handleCopyActiveCell}
+                className="shrink-0 text-[11px] flex items-center gap-1 text-slate-600 hover:text-blue-600 hover:bg-slate-100 px-2 py-0.5 rounded transition-colors"
+                title="Copy cell text"
+              >
+                {cellCopyStatus === 'copied' ? <Check className="w-3 h-3 text-emerald-600" /> : <CopyIcon className="w-3 h-3 text-slate-400" />}
+                <span>{cellCopyStatus === 'copied' ? 'Copied' : 'Copy'}</span>
+              </button>
+            )}
+
+            {/* Clear Selection */}
+            <button
+              onClick={() => setSelectedCell(null)}
+              className="text-slate-400 hover:text-slate-600 p-0.5 rounded shrink-0"
+              title="Clear selection"
+            >
+              <CloseIcon className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 text-slate-500 text-xs">
+            <Info className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+            <span>
+              Click any cell to inspect its full unabbreviated content here. Drag column header edges to resize width. Double-click any row to view complete record.
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 4. MAIN DATA SHEET TABLE WITH RESIZABLE COLUMNS & CUSTOM HEIGHT/WRAP     */}
+      {/* ========================================================================= */}
+      <div className="w-full flex-1 min-h-0 bg-white rounded-xl border border-slate-200 shadow-xs flex flex-col overflow-hidden">
+        <div ref={tableContainerRef} className="overflow-auto flex-1 min-h-0 w-full relative">
+          <table 
+            className={`border-collapse ${getFontSizeClass()} select-text ${
+              showGridlines ? 'border-spacing-0' : ''
+            }`}
+            style={{ 
+              tableLayout: 'fixed',
+              width: `${totalTableWidth}px`,
+              minWidth: `${totalTableWidth}px`
+            }}
+          >
+            {/* Column Width Definitions */}
+            <colgroup>
+              {/* Row number column */}
+              <col style={{ width: '56px', minWidth: '56px', maxWidth: '56px' }} />
+              {/* Visible data columns */}
+              {orderedVisibleColumns.map((col) => {
+                const width = columnWidths[col.index] !== undefined ? columnWidths[col.index] : getDefaultColWidth(col.index);
+                return <col key={col.index} style={{ width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }} />;
+              })}
+            </colgroup>
+
+            {/* Table Header */}
+            <thead className="sticky top-0 z-20 bg-slate-100 shadow-2xs">
+              <tr className="h-9 leading-9 bg-slate-100">
+                {/* Sticky Row Number Header */}
+                <th
+                  scope="col"
+                  className="sticky left-0 z-30 w-14 px-2 text-center text-[10px] font-bold text-slate-500 uppercase tracking-wider border-r border-b border-slate-300 bg-slate-100 select-none shadow-xs"
+                >
                   #
                 </th>
 
-                {/* Visible Dynamic Columns */}
-                {visibleColumnsList.map(col => {
+                {/* Visible Column Headers */}
+                {orderedVisibleColumns.map((col, idx) => {
+                  const width = columnWidths[col.index] !== undefined ? columnWidths[col.index] : getDefaultColWidth(col.index);
+                  const isSorted = sortConfig.colIndex === col.index;
+                  const isFirstFrozen = freezeFirstCol && idx === 0;
+
                   return (
                     <th
                       key={col.index}
                       scope="col"
-                      className="px-3 py-2 text-left text-xs font-bold text-slate-700 border-r border-slate-200 whitespace-nowrap bg-slate-100"
+                      className={`relative px-1.5 py-0 text-left font-bold text-slate-800 border-r border-b border-slate-300 bg-slate-100 select-none group transition-colors overflow-hidden ${
+                        isFirstFrozen ? 'sticky left-14 z-30 shadow-md bg-slate-100 border-r-2 border-r-blue-300' : ''
+                      }`}
+                      style={{ width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }}
                     >
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-mono text-[10px] bg-slate-200 text-slate-700 px-1 py-0.5 rounded font-bold">
-                          {col.letter}
-                        </span>
-                        <span>{col.headerName}</span>
+                      <div className="flex items-center justify-between gap-0.5 h-9 overflow-hidden">
+                        {/* Header Label & Letter (Clickable to Sort) */}
+                        <div 
+                          onClick={() => handleSortColumn(col.index)}
+                          className="flex items-center gap-1 min-w-0 flex-1 cursor-pointer hover:text-blue-700 overflow-hidden"
+                          title={`${col.letter}: ${col.headerName} (Click to sort)`}
+                        >
+                          <span className={`font-mono text-[10px] px-1 py-0.2 rounded font-bold shrink-0 ${
+                            col.isDefault ? 'bg-blue-100 text-blue-900' : 'bg-slate-200 text-slate-700'
+                          }`}>
+                            {col.letter}
+                          </span>
+                          {width >= 70 && (
+                            <span className="truncate font-semibold text-[11px] min-w-0" title={col.headerName}>
+                              {col.headerName}
+                            </span>
+                          )}
+
+                          {/* Sort Indicator */}
+                          {isSorted && (
+                            <span className="shrink-0 text-blue-600">
+                              {sortConfig.direction === 'asc' ? (
+                                <ArrowUp className="w-3 h-3" />
+                              ) : (
+                                <ArrowDown className="w-3 h-3" />
+                              )}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Column Header Dropdown Menu Trigger */}
+                        {width >= 65 && (
+                          <div className="relative header-menu-container shrink-0">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveHeaderMenu(activeHeaderMenu === col.index ? null : col.index);
+                              }}
+                              className="opacity-0 group-hover:opacity-100 p-0.5 text-slate-400 hover:text-slate-800 hover:bg-slate-200 rounded transition-opacity"
+                              title="Column options"
+                            >
+                              <ChevronDownIcon className="w-3 h-3" />
+                            </button>
+
+                            {/* Column Context Menu */}
+                            {activeHeaderMenu === col.index && (
+                              <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-slate-200 rounded-lg shadow-xl py-1 z-40 text-xs font-normal">
+                                <button
+                                  onClick={() => {
+                                    handleSortColumn(col.index);
+                                    setActiveHeaderMenu(null);
+                                  }}
+                                  className="w-full text-left px-3 py-1.5 hover:bg-slate-100 flex items-center gap-2 text-slate-700"
+                                >
+                                  <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
+                                  <span>Sort A → Z</span>
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    handleAutoFitColumn(col.index);
+                                    setActiveHeaderMenu(null);
+                                  }}
+                                  className="w-full text-left px-3 py-1.5 hover:bg-slate-100 flex items-center gap-2 text-slate-700"
+                                >
+                                  <SlidersHorizontal className="w-3.5 h-3.5 text-slate-400" />
+                                  <span>Auto-fit to Data</span>
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    handleMoveColumn(col.index, 'left');
+                                    setActiveHeaderMenu(null);
+                                  }}
+                                  disabled={idx === 0}
+                                  className="w-full text-left px-3 py-1.5 hover:bg-slate-100 flex items-center gap-2 text-slate-700 disabled:opacity-40"
+                                >
+                                  <MoveLeft className="w-3.5 h-3.5 text-slate-400" />
+                                  <span>Move Left</span>
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    handleMoveColumn(col.index, 'right');
+                                    setActiveHeaderMenu(null);
+                                  }}
+                                  disabled={idx === orderedVisibleColumns.length - 1}
+                                  className="w-full text-left px-3 py-1.5 hover:bg-slate-100 flex items-center gap-2 text-slate-700 disabled:opacity-40"
+                                >
+                                  <MoveRight className="w-3.5 h-3.5 text-slate-400" />
+                                  <span>Move Right</span>
+                                </button>
+                                <div className="my-1 border-t border-slate-100" />
+                                <button
+                                  onClick={() => handleHideColumn(col.index)}
+                                  className="w-full text-left px-3 py-1.5 hover:bg-red-50 text-red-600 flex items-center gap-2"
+                                >
+                                  <EyeOff className="w-3.5 h-3.5" />
+                                  <span>Hide Column</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
+
+                      {/* Interactive Drag-to-Resize Handle on Right Edge */}
+                      <div
+                        onMouseDown={(e) => handleMouseDownResize(e, col.index)}
+                        onDoubleClick={() => handleAutoFitColumn(col.index)}
+                        className="absolute right-0 top-0 bottom-0 w-2.5 cursor-col-resize hover:bg-blue-500/60 active:bg-blue-600 z-10 transition-colors"
+                        title="Drag to resize column width without constraints (double-click to fit data)"
+                      />
                     </th>
                   );
                 })}
-
-                {/* Actions Column */}
-                <th scope="col" className="w-12 px-2 py-2 text-center text-[11px] font-bold text-slate-500 uppercase tracking-wider bg-slate-100">
-                  Action
-                </th>
               </tr>
             </thead>
 
-            <tbody className="bg-white divide-y divide-slate-100">
-              {filteredRows.length === 0 ? (
+            {/* Table Body */}
+            <tbody>
+              {paginatedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={visibleColumnsList.length + 2} className="py-8 text-center text-slate-500">
-                    No rows match your search filter or visible columns.
+                  <td colSpan={orderedVisibleColumns.length + 1} className="py-16 text-center text-slate-400 font-medium">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <Search className="w-8 h-8 text-slate-300" />
+                      <span>No rows match your current search or filter criteria.</span>
+                      {(searchQuery || statusFilter !== 'all') && (
+                        <button
+                          onClick={() => {
+                            setSearchQuery('');
+                            setStatusFilter('all');
+                          }}
+                          className="mt-1 text-xs text-blue-600 hover:underline font-semibold"
+                        >
+                          Clear all filters
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ) : (
-                filteredRows.map((rowObj) => {
-                  const validationReason = validationMap.get(rowObj.originalRowIndex);
-                  const isFlagged = !!validationReason;
+                paginatedRows.map((rowObj) => {
+                  const valInfo = validationMap.get(rowObj.originalRowIndex);
+                  const isError = valInfo?.isError ?? false;
+                  const isWarning = valInfo?.isWarning ?? false;
+                  const isFlagged = isError || isWarning;
+                  const tooltipText = valInfo?.reasons
+                    ? valInfo.reasons.map(r => r.replace('[WARNING] ', '').replace('[WARNING]', '')).join('\n• ')
+                    : undefined;
+
+                  let rowBg = zebraStriping
+                    ? 'odd:bg-white even:bg-slate-50/50 hover:bg-blue-50/60'
+                    : 'bg-white hover:bg-blue-50/60';
+                  let indexBg = 'bg-slate-100/70';
+
+                  if (isError) {
+                    rowBg = 'bg-red-50/80 hover:bg-red-100/70';
+                    indexBg = 'bg-red-100/90 text-red-800';
+                  } else if (isWarning) {
+                    rowBg = 'bg-amber-50/70 hover:bg-amber-100/70';
+                    indexBg = 'bg-amber-100/80 text-amber-800';
+                  }
+
+                  const rowHeightClass = getDensityRowClasses();
+                  const cellTextClass = getDensityCellClasses();
 
                   return (
                     <tr
+                      id={`sheet-row-${rowObj.excelRowNumber}`}
                       key={rowObj.originalRowIndex}
-                      className={`transition-colors align-top ${
-                        isFlagged ? 'bg-red-50/70 hover:bg-red-100/70' : 'odd:bg-white even:bg-slate-50/50 hover:bg-blue-50/60'
-                      }`}
+                      onDoubleClick={() => handleInspectRowByNumber(rowObj.excelRowNumber)}
+                      className={`transition-colors ${rowBg} ${rowHeightClass}`}
                     >
-                      {/* Row Index Cell */}
-                      <td className="px-2 py-2 text-center text-[11px] font-mono text-slate-400 border-r border-slate-200 whitespace-nowrap bg-slate-50/50">
+                      {/* Sticky Row Number Cell */}
+                      <td
+                        onClick={() => handleInspectRowByNumber(rowObj.excelRowNumber)}
+                        className={`sticky left-0 z-10 px-2 text-center text-[11px] font-mono border-r border-b border-slate-200 select-none cursor-pointer hover:bg-blue-100/70 ${indexBg}`}
+                        title={tooltipText ? `Row ${rowObj.excelRowNumber} (Click to inspect):\n• ${tooltipText}` : `Row ${rowObj.excelRowNumber} (Double click to inspect)`}
+                      >
                         <div className="flex items-center justify-center gap-1">
-                          {isFlagged && (
-                            <span title={validationReason} className="text-red-500">
+                          {isError && (
+                            <span className="text-red-500 shrink-0">
                               <ErrorIcon className="w-3.5 h-3.5" />
                             </span>
                           )}
-                          <span>{rowObj.excelRowNumber}</span>
+                          {!isError && isWarning && (
+                            <span className="w-3.5 h-3.5 rounded-full bg-amber-500 text-white text-[9px] font-bold flex items-center justify-center shrink-0">
+                              !
+                            </span>
+                          )}
+                          <span className={isFlagged ? 'font-bold' : 'text-slate-400'}>
+                            {rowObj.excelRowNumber}
+                          </span>
                         </div>
                       </td>
 
-                      {/* Data Cells */}
-                      {visibleColumnsList.map(col => {
+                      {/* Visible Data Cells */}
+                      {orderedVisibleColumns.map((col, idx) => {
+                        const width = columnWidths[col.index] !== undefined ? columnWidths[col.index] : getDefaultColWidth(col.index);
                         const cellVal = rowObj.data[col.index];
-                        const displayStr = cellVal !== undefined && cellVal !== null ? String(cellVal) : '';
-                        const isEditingThis = editingCell?.rowIndex === rowObj.originalRowIndex && editingCell?.colIndex === col.index;
+                        const displayStr = cellVal !== undefined && cellVal !== null ? String(cellVal).trim() : '';
+                        const isSelected = selectedCell?.rowIdx === rowObj.originalRowIndex && selectedCell?.colIdx === col.index;
+                        const isFirstFrozen = freezeFirstCol && idx === 0;
 
                         return (
                           <td
                             key={col.index}
-                            onDoubleClick={() => handleStartCellEdit(rowObj.originalRowIndex, col.index, cellVal)}
-                            className="px-3 py-2 text-slate-700 border-r border-slate-100 whitespace-pre-wrap max-w-xs break-words relative group cursor-pointer hover:bg-blue-100/40 transition-colors"
-                            title="Double-click to edit cell"
+                            onClick={() => {
+                              setSelectedCell({
+                                rowIdx: rowObj.originalRowIndex,
+                                excelRowNumber: rowObj.excelRowNumber,
+                                colIdx: col.index,
+                                letter: col.letter,
+                                headerName: col.headerName,
+                                value: displayStr,
+                                reasons: valInfo?.reasons || [],
+                                isError,
+                                isWarning
+                              });
+                            }}
+                            className={`px-2 py-1 text-slate-800 border-r border-b border-slate-200/80 cursor-pointer transition-colors overflow-hidden ${
+                              isFirstFrozen ? 'sticky left-14 z-10 bg-inherit border-r-2 border-r-blue-300 shadow-sm' : ''
+                            } ${
+                              isSelected ? 'ring-2 ring-blue-500 ring-inset bg-blue-100/80 font-medium' : ''
+                            }`}
+                            style={{ width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }}
+                            title={displayStr}
                           >
-                            {isEditingThis ? (
-                              <div className="flex items-center gap-1">
-                                <textarea
-                                  autoFocus
-                                  value={editValue}
-                                  onChange={(e) => setEditValue(e.target.value)}
-                                  onKeyDown={handleKeyDownEdit}
-                                  rows={2}
-                                  className="w-full text-xs p-1 border-2 border-blue-500 rounded focus:outline-none bg-white font-sans text-slate-900 shadow-inner"
-                                />
-                                <button
-                                  onClick={handleSaveCellEdit}
-                                  className="p-1 bg-blue-600 text-white rounded hover:bg-blue-700 shadow-sm"
-                                  title="Save edit"
-                                >
-                                  <Check className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="flex items-start justify-between gap-1 group">
-                                <span className={!displayStr ? 'text-slate-300 italic' : ''}>
-                                  {displayStr || '(empty)'}
-                                </span>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleStartCellEdit(rowObj.originalRowIndex, col.index, cellVal);
-                                  }}
-                                  className="opacity-0 group-hover:opacity-100 p-0.5 text-slate-400 hover:text-blue-600 transition-opacity"
-                                  title="Edit cell"
-                                >
-                                  <EditIcon className="w-3 h-3" />
-                                </button>
-                              </div>
-                            )}
+                            <div className={`${cellTextClass} overflow-hidden`}>
+                              {displayStr ? (
+                                searchQuery.trim() && displayStr.toLowerCase().includes(searchQuery.toLowerCase()) ? (
+                                  <span>
+                                    {/* Simple highlight of query match */}
+                                    {renderHighlightedText(displayStr, searchQuery)}
+                                  </span>
+                                ) : (
+                                  displayStr
+                                )
+                              ) : (
+                                <span className="text-slate-300 italic text-[11px] select-none">—</span>
+                              )}
+                            </div>
                           </td>
                         );
                       })}
-
-                      {/* Row Action Cell */}
-                      <td className="px-2 py-2 text-center text-slate-400">
-                        <button
-                          onClick={() => handleDeleteRow(rowObj.originalRowIndex)}
-                          className="p-1 text-slate-400 hover:text-red-600 rounded hover:bg-red-50 transition-colors"
-                          title="Delete row"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </td>
                     </tr>
                   );
                 })
@@ -661,17 +1553,159 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
           </table>
         </div>
 
-        {/* Footer info bar */}
-        <div className="bg-slate-50 border-t border-slate-200 px-4 py-2 flex items-center justify-between text-xs text-slate-500">
-          <div>
-            Showing <span className="font-semibold text-slate-700">{filteredRows.length}</span> rows preserve uploaded order.
+        {/* ========================================================================= */}
+        {/* 5. BOTTOM STATUS & PAGINATION CONTROLS                                    */}
+        {/* ========================================================================= */}
+        <div className="bg-slate-50 border-t border-slate-200 px-3 py-2 flex flex-wrap items-center justify-between gap-3 text-[11px] text-slate-500 flex-shrink-0">
+          {/* Summary */}
+          <div className="flex items-center gap-3">
+            <span>
+              Rows <strong className="font-semibold text-slate-800 tabular-nums">
+                {filteredRows.length === 0 ? 0 : (currentPage - 1) * (pageSize === 'all' ? filteredRows.length : pageSize) + 1}
+              </strong>
+              {' – '}
+              <strong className="font-semibold text-slate-800 tabular-nums">
+                {pageSize === 'all' ? filteredRows.length : Math.min(currentPage * pageSize, filteredRows.length)}
+              </strong>
+              {' of '}
+              <strong className="font-semibold text-slate-800 tabular-nums">{filteredRows.length}</strong>
+            </span>
+            <span className="text-slate-300">|</span>
+            <span>
+              <strong className="font-semibold text-slate-800 tabular-nums">{orderedVisibleColumns.length}</strong> columns visible
+            </span>
+            {sortConfig.colIndex !== null && (
+              <>
+                <span className="text-slate-300">|</span>
+                <span className="flex items-center gap-1 text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
+                  <span>Sorted: Col {getColumnLetter(sortConfig.colIndex)} ({sortConfig.direction})</span>
+                  <button 
+                    onClick={() => setSortConfig({ colIndex: null, direction: null })}
+                    className="hover:text-blue-900 font-bold ml-0.5"
+                    title="Clear sort"
+                  >
+                    ×
+                  </button>
+                </span>
+              </>
+            )}
           </div>
-          <div className="flex items-center gap-2">
-            <span className="inline-block w-2 h-2 rounded-full bg-blue-500"></span>
-            <span>Default Columns: <strong className="text-slate-700">B, C, D, E, F, G, H, Q</strong></span>
+
+          {/* Page size & Pagination navigation */}
+          <div className="flex items-center gap-3">
+            {/* Page size selector */}
+            <div className="flex items-center gap-1">
+              <span>Per page:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setPageSize(val === 'all' ? 'all' : parseInt(val, 10));
+                  setCurrentPage(1);
+                }}
+                className="text-xs bg-white border border-slate-300 rounded px-1.5 py-0.5 font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+                <option value={250}>250</option>
+                <option value="all">All</option>
+              </select>
+            </div>
+
+            {/* Pagination buttons */}
+            {pageSize !== 'all' && totalPages > 1 && (
+              <div className="flex items-center gap-1 bg-white border border-slate-300 rounded-lg p-0.5 shadow-2xs">
+                <button
+                  onClick={() => setCurrentPage(1)}
+                  disabled={currentPage === 1}
+                  className="p-1 rounded text-slate-600 hover:text-slate-900 hover:bg-slate-100 disabled:opacity-30 disabled:pointer-events-none"
+                  title="First page"
+                >
+                  <ChevronsLeft className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                  disabled={currentPage === 1}
+                  className="p-1 rounded text-slate-600 hover:text-slate-900 hover:bg-slate-100 disabled:opacity-30 disabled:pointer-events-none"
+                  title="Previous page"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+
+                <span className="px-2 font-mono font-medium text-slate-700 tabular-nums">
+                  Page {currentPage} of {totalPages}
+                </span>
+
+                <button
+                  onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                  disabled={currentPage === totalPages}
+                  className="p-1 rounded text-slate-600 hover:text-slate-900 hover:bg-slate-100 disabled:opacity-30 disabled:pointer-events-none"
+                  title="Next page"
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => setCurrentPage(totalPages)}
+                  disabled={currentPage === totalPages}
+                  className="p-1 rounded text-slate-600 hover:text-slate-900 hover:bg-slate-100 disabled:opacity-30 disabled:pointer-events-none"
+                  title="Last page"
+                >
+                  <ChevronsRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
+
+      {/* ========================================================================= */}
+      {/* 6. ROW DETAIL MODAL (SIDE INSPECTOR FOR INDIVIDUAL RECORD)                 */}
+      {/* ========================================================================= */}
+      {inspectedRow && (
+        <RowDetailModal
+          isOpen={inspectedRowIndex !== null}
+          onClose={() => setInspectedRowIndex(null)}
+          currentRow={inspectedRow}
+          columns={allColumns}
+          visibleColumns={orderedVisibleColumns}
+          totalRows={filteredRows.length}
+          currentRowDisplayIndex={currentDisplayIndex}
+          onPrevRow={() => {
+            if (currentDisplayIndex > 0) {
+              const prevRow = filteredRows[currentDisplayIndex - 1];
+              handleInspectRowByNumber(prevRow.excelRowNumber);
+            }
+          }}
+          onNextRow={() => {
+            if (currentDisplayIndex < filteredRows.length - 1) {
+              const nextRow = filteredRows[currentDisplayIndex + 1];
+              handleInspectRowByNumber(nextRow.excelRowNumber);
+            }
+          }}
+          hasPrev={currentDisplayIndex > 0}
+          hasNext={currentDisplayIndex < filteredRows.length - 1}
+          validationInfo={validationMap.get(inspectedRow.originalRowIndex)}
+        />
+      )}
     </div>
+  );
+};
+
+// Helper for highlighting text match in search
+const renderHighlightedText = (text: string, query: string) => {
+  if (!query) return text;
+  const parts = text.split(new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.toLowerCase() === query.toLowerCase() ? (
+          <mark key={i} className="bg-yellow-200 text-slate-900 font-semibold px-0.5 rounded-2xs">
+            {part}
+          </mark>
+        ) : (
+          part
+        )
+      )}
+    </>
   );
 };

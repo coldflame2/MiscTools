@@ -17,6 +17,138 @@ export const isIgnoredLastRow = (row: (string | number)[]): boolean => {
   return false;
 };
 
+export const standardizeAgency = (agency: string): string => {
+  const clean = agency.trim().replace(/^[\s,.;:-]+|[\s,.;:-]+$/g, '');
+  const lower = clean.toLowerCase();
+  if (lower.includes('shutterstock')) return 'Shutterstock';
+  if (lower.includes('getty')) return 'Getty Images';
+  if (lower.includes('alamy')) return 'Alamy Stock Photo';
+  if (lower === 'oup' || lower.includes('oxford university press')) return 'OUP';
+  if (lower.includes('istock')) return 'iStock';
+  if (lower.includes('adobe')) return 'Adobe Stock';
+  if (lower.includes('corbis')) return 'Corbis';
+  return clean;
+};
+
+export const cleanRightsType = (rights: string): string => {
+  const clean = rights.trim().replace(/^[\s,.;:-]+|[\s,.;:-]+$/g, '');
+  const lower = clean.toLowerCase();
+  if (lower === 'royalty free' || lower === 'royalty-free' || lower === 'rf') {
+    return 'RF';
+  }
+  if (lower === 'rights managed' || lower === 'rights-managed' || lower === 'rights manages' || lower === 'rights-manages' || lower === 'rm') {
+    return 'RM';
+  }
+  if (lower === 'royalty free extended' || lower === 'royalty-free extended' || lower === 'rfe') {
+    return 'RFe';
+  }
+  const upper = clean.toUpperCase();
+  if (upper === 'RFE') return 'RFe';
+  return upper;
+};
+
+export interface TwoPartNoteData {
+  isTwoPartNote: boolean;
+  previousSource: string;
+  previousRightsType: string;
+  outcome?: 'tineye_found' | 'reverse_research_found' | 'not_found_research_recommended';
+  newSource?: string;
+  newRightsType?: string;
+}
+
+export const parseTwoPartNote = (noteText: string): TwoPartNoteData | null => {
+  if (!noteText) return null;
+  const clean = noteText.replace(/\s+/g, ' ').trim();
+  const lower = clean.toLowerCase();
+
+  // Must have indication of two parts: starts with (1) or contains "earlier" and "licensed"
+  const hasPart1Marker = /\(?1[\).]\s*/.test(clean) || (lower.includes('earlier') && lower.includes('licensed'));
+  if (!hasPart1Marker) return null;
+
+  // Split into Part 1 and Part 2
+  let part1 = clean;
+  let part2 = '';
+  const match2 = clean.search(/(?:\(?2[\).:]\s*)|(?:in tineye)/i);
+  if (match2 !== -1 && match2 > 0) {
+    part1 = clean.substring(0, match2).trim();
+    part2 = clean.substring(match2).trim();
+  } else {
+    const tineyeIdx = lower.indexOf('tineye');
+    if (tineyeIdx !== -1) {
+      part1 = clean.substring(0, tineyeIdx).trim();
+      part2 = clean.substring(tineyeIdx).trim();
+    }
+  }
+
+  // Parse Part 1: Previous source and rights type
+  // Pattern: "Earlier the image was licensed from {source} as {rights type}"
+  // Supports RF, RM, RFe as well as "Royalty Free", "Rights Managed", "Rights Manages", etc.
+  let previousSource = '';
+  let previousRightsType = '';
+
+  const part1Match = part1.match(/from\s+([A-Za-z0-9\s._'-]+?)\s+as\s+([A-Za-z0-9\s/_-]+?)(?:[.,;:]|\s*\(2\)|$)/i);
+  if (part1Match) {
+    previousSource = standardizeAgency(part1Match[1]);
+    previousRightsType = cleanRightsType(part1Match[2]);
+  } else {
+    const vendors = ['Shutterstock', 'Getty Images', 'Alamy Stock Photo', 'Alamy', 'OUP', 'Corbis', 'iStock', 'Adobe Stock'];
+    for (const v of vendors) {
+      if (part1.toLowerCase().includes(v.toLowerCase())) {
+        previousSource = standardizeAgency(v);
+        break;
+      }
+    }
+    const rightsMatch = part1.match(/\b(Royalty\s+Free(?:\s+Extended)?|Rights\s+Manage[ds]|RF|RM|RFe)\b/i);
+    if (rightsMatch) {
+      previousRightsType = cleanRightsType(rightsMatch[1]);
+    }
+  }
+
+  // Parse Part 2: Outcome & new source / rights
+  const lowerPart2 = part2.toLowerCase();
+  let outcome: 'tineye_found' | 'reverse_research_found' | 'not_found_research_recommended' | undefined;
+  let newSource = '';
+  let newRightsType = '';
+
+  const hasReverseResearch = lowerPart2.includes('reverse research') || lowerPart2.includes('reverse search');
+  const reverseFoundMatch = part2.match(/(?:reverse\s+research|reverse\s+search)[^.]*?found\s+(?:on|at|in)\s+([A-Za-z0-9\s._'-]+?)\s+as\s+([A-Za-z0-9\s/_-]+?)(?:[.,;:]|\s*please|\s*\(|$)/i);
+
+  if (hasReverseResearch && reverseFoundMatch) {
+    outcome = 'reverse_research_found';
+    newSource = standardizeAgency(reverseFoundMatch[1]);
+    newRightsType = cleanRightsType(reverseFoundMatch[2]);
+  } else {
+    const tineyeFoundMatch = part2.match(/tineye[^.]*?found\s+(?:on|at|in)\s+([A-Za-z0-9\s._'-]+?)\s+as\s+([A-Za-z0-9\s/_-]+?)(?:[.,;:]|\s*please|\s*\(|$)/i);
+    const tineyeNotFound = lowerPart2.includes('tineye') && (lowerPart2.includes('not found') || lowerPart2.includes('is not found'));
+
+    if (tineyeFoundMatch && !tineyeNotFound) {
+      outcome = 'tineye_found';
+      newSource = standardizeAgency(tineyeFoundMatch[1]);
+      newRightsType = cleanRightsType(tineyeFoundMatch[2]);
+    } else if (tineyeNotFound || lowerPart2.includes('photo research') || lowerPart2.includes('do research')) {
+      outcome = 'not_found_research_recommended';
+    } else {
+      const generalFoundMatch = part2.match(/found\s+(?:on|at|in)\s+([A-Za-z0-9\s._'-]+?)\s+as\s+([A-Za-z0-9\s/_-]+?)(?:[.,;:]|\s*please|\s*\(|$)/i);
+      if (generalFoundMatch) {
+        outcome = hasReverseResearch ? 'reverse_research_found' : 'tineye_found';
+        newSource = standardizeAgency(generalFoundMatch[1]);
+        newRightsType = cleanRightsType(generalFoundMatch[2]);
+      } else if (lowerPart2.includes('not found')) {
+        outcome = 'not_found_research_recommended';
+      }
+    }
+  }
+
+  return {
+    isTwoPartNote: true,
+    previousSource,
+    previousRightsType,
+    outcome,
+    newSource,
+    newRightsType
+  };
+};
+
 /**
  * Validates records based on the LR / AMH log rules.
  * @param rawData - The raw data array from the Excel sheet or pasted table.
@@ -129,11 +261,11 @@ export const validateData = (
 
     // 2. Usage Classification
     const usageVal = String(row[columnIndices.usageColIndex] ?? '').trim();
-    const usageRegex = /^(New|Pick-?up)\/(License|No-? License|No-?License)$/i;
+    const usageRegex = /^(New|Pick-?up)\/(License|No-? License|No-?License)$|^New$/i;
     if (!usageVal) {
       getOrCreateFlaggedRecord(i).reasons.push('Usage Classification is required.');
     } else if (!usageRegex.test(usageVal)) {
-      getOrCreateFlaggedRecord(i).reasons.push(`Invalid Usage Classification "${usageVal}". Must be New/License, New/No License, Pickup/License, or Pickup/No License.`);
+      getOrCreateFlaggedRecord(i).reasons.push(`Invalid Usage Classification "${usageVal}". Must be New, New/License, New/No License, Pickup/License, or Pickup/No License.`);
     }
 
     // 3. Description
@@ -227,6 +359,21 @@ export const validateData = (
       }
     }
 
+    // Notes classification & relationship flags
+    const notesVal = columnIndices.notesColIndex !== undefined ? String(row[columnIndices.notesColIndex] ?? '').trim() : '';
+    const cleanNote = notesVal.replace(/\s+/g, ' ').trim();
+    const lowerNote = cleanNote.toLowerCase();
+
+    const isNoteRoyaltyFree = lowerNote.includes('marked as royalty free in the reproduction form') && lowerNote.includes('okay to use');
+    const isNoteOUPOwned = lowerNote.includes('marked as oup owned in the reproduction form') && lowerNote.includes('okay to use');
+    const isNoteCommissioned = (lowerNote.includes('commissioned photography') || lowerNote.includes('commissioned')) && 
+      (lowerNote.includes('as per acknowledgement') || lowerNote.includes('acknowledgement')) && 
+      lowerNote.includes('okay to use');
+    const hasZeroFeeNote = isNoteRoyaltyFree || isNoteOUPOwned || isNoteCommissioned;
+
+    const twoPartNote = parseTwoPartNote(notesVal);
+    const hasTwoPartNote = !!(twoPartNote && twoPartNote.outcome);
+
     // 9. Photolog Creation (£)
     if (columnIndices.photologColIndex !== undefined) {
       const photologVal = String(row[columnIndices.photologColIndex] ?? '').trim();
@@ -239,7 +386,14 @@ export const validateData = (
     // 10. Status recleared (£)
     if (columnIndices.statusReclearedColIndex !== undefined) {
       const statusReclearedVal = String(row[columnIndices.statusReclearedColIndex] ?? '').trim();
-      if (statusReclearedVal !== '') {
+      if (hasZeroFeeNote) {
+        if (statusReclearedVal !== '' && statusReclearedVal !== '0') {
+          const numRecleared = parseFloat(statusReclearedVal);
+          if (isNaN(numRecleared) || numRecleared !== 0) {
+            getOrCreateFlaggedRecord(i).reasons.push(`Note discrepancy: Note indicates Status recleared (£) must be 0 or blank, but found "${statusReclearedVal}".`);
+          }
+        }
+      } else if (!hasTwoPartNote && statusReclearedVal !== '') {
         const numRecleared = parseFloat(statusReclearedVal);
         if (isNaN(numRecleared) || numRecleared !== 4) {
           getOrCreateFlaggedRecord(i).reasons.push(`Status recleared (£) must be blank or 4, but is "${statusReclearedVal}".`);
@@ -250,7 +404,14 @@ export const validateData = (
     // 11. Selections made (£)
     if (columnIndices.selectionsMadeColIndex !== undefined) {
       const selectionsVal = String(row[columnIndices.selectionsMadeColIndex] ?? '').trim();
-      if (selectionsVal !== '') {
+      if (hasZeroFeeNote) {
+        if (selectionsVal !== '' && selectionsVal !== '0') {
+          const numSelections = parseFloat(selectionsVal);
+          if (isNaN(numSelections) || numSelections !== 0) {
+            getOrCreateFlaggedRecord(i).reasons.push(`Note discrepancy: Note indicates Selections made (£) must be 0 or blank, but found "${selectionsVal}".`);
+          }
+        }
+      } else if (!hasTwoPartNote && selectionsVal !== '') {
         const numSelections = parseFloat(selectionsVal);
         if (isNaN(numSelections) || (numSelections !== 4 && numSelections !== 8)) {
           getOrCreateFlaggedRecord(i).reasons.push(`Selections made (£) must be blank, 4, or 8, but is "${selectionsVal}".`);
@@ -262,7 +423,7 @@ export const validateData = (
     if (columnIndices.feeColIndex !== undefined) {
       const feeVal = String(row[columnIndices.feeColIndex] ?? '').trim();
       const usageLower = usageVal.toLowerCase();
-      const isLicenseType = usageLower.endsWith('/license') || usageLower.includes('/license') || usageLower.includes('/ license');
+      const isLicenseType = (usageLower.includes('new/license') || usageLower.includes('pickup/license') || usageLower.includes('pick-up/license')) && !usageLower.includes('no');
       
       if (isLicenseType) {
         const numFee = parseFloat(feeVal);
@@ -289,6 +450,194 @@ export const validateData = (
               getOrCreateFlaggedRecord(i).reasons.push(`License fee for Alamy Stock Photo must be either 45 or 29, but is "${feeVal}".`);
             }
           }
+        }
+      }
+    }
+
+    // 13. Notes Relationship Checks
+    if (hasZeroFeeNote) {
+      // Usage Classification must be Pickup/No License
+      const cleanUsage = usageVal.toLowerCase().replace(/[\s-]/g, '');
+      if (cleanUsage !== 'pickup/nolicense') {
+        getOrCreateFlaggedRecord(i).reasons.push(`Note discrepancy: Note indicates Usage Classification must be "Pickup/No License", but found "${usageVal || 'blank'}".`);
+      }
+
+      // Cost (License Fee) must be 0 or blank
+      if (columnIndices.feeColIndex !== undefined) {
+        const feeVal = String(row[columnIndices.feeColIndex] ?? '').trim();
+        if (feeVal !== '' && feeVal !== '0') {
+          const numFee = parseFloat(feeVal.replace(/[^0-9.-]/g, ''));
+          if (!isNaN(numFee) && numFee !== 0) {
+            getOrCreateFlaggedRecord(i).reasons.push(`Note discrepancy: Note indicates Cost (License Fee) must be 0 or blank, but found "${feeVal}".`);
+          }
+        }
+      }
+
+      // Note 1: Royalty Free in Reproduction Form
+      if (isNoteRoyaltyFree) {
+        const cleanRights = rightsVal.toUpperCase();
+        if (cleanRights !== 'RF') {
+          getOrCreateFlaggedRecord(i).reasons.push(`Note discrepancy: Note indicates Rights Type must be "RF", but found "${rightsVal || 'blank'}".`);
+        }
+      }
+
+      // Note 2: OUP owned in Reproduction Form
+      if (isNoteOUPOwned) {
+        const cleanRights = rightsVal.toUpperCase();
+        if (cleanRights !== 'RF' && cleanRights !== 'RFE') {
+          getOrCreateFlaggedRecord(i).reasons.push(`Note discrepancy: Note indicates Rights Type must be "RF" or "RFe", but found "${rightsVal || 'blank'}".`);
+        }
+        if (sourceVal !== 'OUP') {
+          getOrCreateFlaggedRecord(i).reasons.push(`Note discrepancy: Note indicates Source must be "OUP", but found "${sourceVal || 'blank'}".`);
+        }
+      }
+
+      // Note 3: Commissioned Photography
+      if (isNoteCommissioned) {
+        const cleanRights = rightsVal.toUpperCase();
+        if (cleanRights !== 'RF' && cleanRights !== 'RFE') {
+          getOrCreateFlaggedRecord(i).reasons.push(`Note discrepancy: Note indicates Rights Type must be "RF" or "RFe", but found "${rightsVal || 'blank'}".`);
+        }
+        if (sourceVal !== 'OUP') {
+          getOrCreateFlaggedRecord(i).reasons.push(`Note discrepancy: Note indicates Source must be "OUP", but found "${sourceVal || 'blank'}".`);
+        }
+      }
+    }
+
+    // 14. Two-Part Notes Relationship Checks
+    if (twoPartNote && twoPartNote.outcome) {
+      const statusReclearedVal = columnIndices.statusReclearedColIndex !== undefined ? String(row[columnIndices.statusReclearedColIndex] ?? '').trim() : '';
+      const selectionsVal = columnIndices.selectionsMadeColIndex !== undefined ? String(row[columnIndices.selectionsMadeColIndex] ?? '').trim() : '';
+
+      if (twoPartNote.outcome === 'not_found_research_recommended') {
+        // Usage Classification: New
+        const cleanUsage = usageVal.toLowerCase().replace(/[\s-]/g, '');
+        if (!cleanUsage.startsWith('new')) {
+          getOrCreateFlaggedRecord(i).reasons.push(
+            `Note discrepancy: When Photo Research is recommended, Usage Classification must be "New" (or "New/No License"), but found "${usageVal || 'blank'}".`
+          );
+        }
+
+        // Source: Same as in Part 1 (previous source)
+        if (twoPartNote.previousSource && sourceVal.toLowerCase() !== twoPartNote.previousSource.toLowerCase()) {
+          getOrCreateFlaggedRecord(i).reasons.push(
+            `Note discrepancy: When Photo Research is recommended, Source must match the previous image source ("${twoPartNote.previousSource}"), but found "${sourceVal || 'blank'}".`
+          );
+        }
+
+        // Rights Type: Same as in Part 1 (previous rights type)
+        if (twoPartNote.previousRightsType && rightsVal.toUpperCase() !== twoPartNote.previousRightsType.toUpperCase()) {
+          getOrCreateFlaggedRecord(i).reasons.push(
+            `Note discrepancy: When Photo Research is recommended, Rights Type must match the previous image rights ("${twoPartNote.previousRightsType}"), but found "${rightsVal || 'blank'}".`
+          );
+        }
+
+        // Status recleared: 4
+        if (statusReclearedVal === '' || parseFloat(statusReclearedVal) !== 4) {
+          getOrCreateFlaggedRecord(i).reasons.push(
+            `Note discrepancy: When Photo Research is recommended, Status recleared (£) must be 4, but found "${statusReclearedVal || 'blank'}".`
+          );
+        }
+
+        // Selections made: 0 or blank
+        if (selectionsVal !== '' && selectionsVal !== '0') {
+          const numSelections = parseFloat(selectionsVal);
+          if (isNaN(numSelections) || numSelections !== 0) {
+            getOrCreateFlaggedRecord(i).reasons.push(
+              `Note discrepancy: When Photo Research is recommended, Selections made (£) must be 0 or blank, but found "${selectionsVal}".`
+            );
+          }
+        }
+
+        // License Fee: 0 or blank
+        if (columnIndices.feeColIndex !== undefined) {
+          const feeVal = String(row[columnIndices.feeColIndex] ?? '').trim();
+          if (feeVal !== '' && feeVal !== '0') {
+            const numFee = parseFloat(feeVal.replace(/[^0-9.-]/g, ''));
+            if (!isNaN(numFee) && numFee !== 0) {
+              getOrCreateFlaggedRecord(i).reasons.push(
+                `Note discrepancy: When Photo Research is recommended, License fee must be 0 or blank, but found "${feeVal}".`
+              );
+            }
+          }
+        }
+      } else if (twoPartNote.outcome === 'tineye_found') {
+        // Usage Classification: Pickup/License
+        const cleanUsage = usageVal.toLowerCase().replace(/[\s-]/g, '');
+        if (cleanUsage !== 'pickup/license') {
+          getOrCreateFlaggedRecord(i).reasons.push(
+            `Note discrepancy: When image is found in TinEye and licensing is recommended, Usage Classification must be "Pickup/License", but found "${usageVal || 'blank'}".`
+          );
+        }
+
+        // Source: source found during TinEye
+        if (twoPartNote.newSource && sourceVal.toLowerCase() !== twoPartNote.newSource.toLowerCase()) {
+          getOrCreateFlaggedRecord(i).reasons.push(
+            `Note discrepancy: When image is found in TinEye, Source must be "${twoPartNote.newSource}", but found "${sourceVal || 'blank'}".`
+          );
+        }
+
+        // Rights Type: rights type found during TinEye
+        if (twoPartNote.newRightsType && rightsVal.toUpperCase() !== twoPartNote.newRightsType.toUpperCase()) {
+          getOrCreateFlaggedRecord(i).reasons.push(
+            `Note discrepancy: When image is found in TinEye, Rights Type must be "${twoPartNote.newRightsType}", but found "${rightsVal || 'blank'}".`
+          );
+        }
+
+        // Status recleared: 4
+        if (statusReclearedVal === '' || parseFloat(statusReclearedVal) !== 4) {
+          getOrCreateFlaggedRecord(i).reasons.push(
+            `Note discrepancy: When image is found in TinEye, Status recleared (£) must be 4, but found "${statusReclearedVal || 'blank'}".`
+          );
+        }
+
+        // Selections made: 0 or blank
+        if (selectionsVal !== '' && selectionsVal !== '0') {
+          const numSelections = parseFloat(selectionsVal);
+          if (isNaN(numSelections) || numSelections !== 0) {
+            getOrCreateFlaggedRecord(i).reasons.push(
+              `Note discrepancy: When image is found in TinEye, Selections made (£) must be 0 or blank, but found "${selectionsVal}".`
+            );
+          }
+        }
+      } else if (twoPartNote.outcome === 'reverse_research_found') {
+        // Usage Classification: Pickup/License
+        const cleanUsage = usageVal.toLowerCase().replace(/[\s-]/g, '');
+        if (cleanUsage !== 'pickup/license') {
+          getOrCreateFlaggedRecord(i).reasons.push(
+            `Note discrepancy: When image is found in Reverse Research and licensing is recommended, Usage Classification must be "Pickup/License", but found "${usageVal || 'blank'}".`
+          );
+        }
+
+        // Source: source found during Reverse Research
+        if (twoPartNote.newSource && sourceVal.toLowerCase() !== twoPartNote.newSource.toLowerCase()) {
+          getOrCreateFlaggedRecord(i).reasons.push(
+            `Note discrepancy: When image is found in Reverse Research, Source must be "${twoPartNote.newSource}", but found "${sourceVal || 'blank'}".`
+          );
+        }
+
+        // Rights Type: rights type found during Reverse Research
+        if (twoPartNote.newRightsType && rightsVal.toUpperCase() !== twoPartNote.newRightsType.toUpperCase()) {
+          getOrCreateFlaggedRecord(i).reasons.push(
+            `Note discrepancy: When image is found in Reverse Research, Rights Type must be "${twoPartNote.newRightsType}", but found "${rightsVal || 'blank'}".`
+          );
+        }
+
+        // Status recleared: 0 or blank
+        if (statusReclearedVal !== '' && statusReclearedVal !== '0') {
+          const numRecleared = parseFloat(statusReclearedVal);
+          if (isNaN(numRecleared) || numRecleared !== 0) {
+            getOrCreateFlaggedRecord(i).reasons.push(
+              `Note discrepancy: When image is found in Reverse Research, Status recleared (£) must be 0 or blank, but found "${statusReclearedVal}".`
+            );
+          }
+        }
+
+        // Selections made: 8
+        if (selectionsVal === '' || parseFloat(selectionsVal) !== 8) {
+          getOrCreateFlaggedRecord(i).reasons.push(
+            `Note discrepancy: When image is found in Reverse Research, Selections made (£) must be 8, but found "${selectionsVal || 'blank'}".`
+          );
         }
       }
     }
