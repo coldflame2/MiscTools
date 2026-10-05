@@ -9,7 +9,7 @@ import { FileUpload } from './components/FileUpload';
 import { ResultsTable } from './components/ResultsTable';
 import { ErrorIcon } from './components/icons/ErrorIcon';
 import { ActionsHeader } from './components/ActionsHeader';
-import { DropdownMenu } from './components/DropdownMenu';
+import { MenuIcon } from './components/icons/MenuIcon';
 import { InfoPanel } from './components/InfoPanel';
 import { NavigationRail } from './components/NavigationRail';
 import { EditableLogModal } from './components/EditableLogModal';
@@ -27,7 +27,7 @@ import type { AcknowledgementRecord, AppStatus, AIFlaggedRecord, ContactSheetSta
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from "docx";
 import saveAs from "file-saver";
 import { EditIcon } from './components/icons/EditIcon';
-import { Lock, HelpCircle } from 'lucide-react';
+import { Lock, HelpCircle, Trash2 } from 'lucide-react';
 
 
 const cleanAcknowledgement = (ack: string, source: string): string => {
@@ -206,6 +206,10 @@ const App: React.FC = () => {
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [isCloudSyncModalOpen, setIsCloudSyncModalOpen] = useState<boolean>(false);
   const [sourceOnlineUrl, setSourceOnlineUrl] = useState<string | null>(null);
+
+  // Side Drawer & Clear Confirmation State
+  const [isNavExpanded, setIsNavExpanded] = useState<boolean>(false);
+  const [showClearConfirm, setShowClearConfirm] = useState<boolean>(false);
 
   // Handler for live edits in raw matrix
   const handleRawDataChange = useCallback((updatedRawData: (string | number)[][]) => {
@@ -1291,163 +1295,169 @@ const App: React.FC = () => {
     switch (status) {
       case 'idle':
         return (
-          <div className="bg-white rounded-xl shadow-lg p-2 sm:p-2">
-            <FileUpload 
-              onFileSelect={handleProcessFile} 
-              onPasteText={handleProcessPastedText} 
-              onOnlineUrlSelect={handleProcessOnlineUrl} 
-            />
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            <header className="mb-2 flex items-center justify-between flex-shrink-0 h-9">
+              <h1 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight">Log review</h1>
+            </header>
+            <div className="bg-white rounded-xl shadow-lg p-2 sm:p-2">
+              <FileUpload 
+                onFileSelect={handleProcessFile} 
+                onPasteText={handleProcessPastedText} 
+                onOnlineUrlSelect={handleProcessOnlineUrl} 
+              />
+            </div>
           </div>
         );
       case 'processing':
         return (
-          <div className="bg-white rounded-xl shadow-lg p-2 sm:p-3">
-            <div className="text-center p-4">
-              <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
-              <p className="mt-4 text-slate-600 font-semibold">Processing your file...</p>
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            <header className="mb-2 flex items-center justify-between flex-shrink-0 h-9">
+              <h1 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight">Log review</h1>
+            </header>
+            <div className="bg-white rounded-xl shadow-lg p-2 sm:p-3">
+              <div className="text-center p-4">
+                <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+                <p className="mt-4 text-slate-600 font-semibold">Processing your file...</p>
+              </div>
             </div>
           </div>
         );
       case 'success':
         return (
           <>
-            <div className="flex gap-2 flex-1 min-h-0 overflow-hidden">
-              <div 
-                className="flex-grow bg-white rounded-xl shadow-lg p-1 sm:p-2 flex gap-1 transition-all duration-300 min-h-0 overflow-hidden"
-                style={{ marginBottom: '0px', marginTop: '0px' }}
-              >
-                <NavigationRail
-                    activeView={activeView}
-                    onNavigate={setActiveView}
-                    dataValidationIssues={dataValidationFlags.length}
-                />
-                <div className="flex-grow min-w-0 flex flex-col min-h-0 overflow-hidden">
-                  <div className="flex justify-between items-center mb-1.5 px-2 flex-shrink-0">
-                      <div className="flex items-center gap-2">
-                        <button
-                            onClick={() => setActiveView('uploadedLog')}
-                            className={`px-3 py-1 font-semibold rounded-lg text-xs transition-colors shadow-sm ${
-                                activeView === 'uploadedLog' 
-                                    ? 'bg-blue-600 text-white' 
-                                    : 'bg-white text-slate-600 border border-slate-300 hover:bg-slate-50'
-                            }`}
-                        >
-                            Uploaded Log (Original Order)
-                        </button>
-                        <button
-                            onClick={() => setActiveView('credits')}
-                            className={`px-3 py-1 font-semibold rounded-lg text-xs transition-colors shadow-sm ${
-                                activeView === 'credits' 
-                                    ? 'bg-blue-600 text-white' 
-                                    : 'bg-white text-slate-600 border border-slate-300 hover:bg-slate-50'
-                            }`}
-                        >
-                            Credits View
-                        </button>
-                        <button
-                            onClick={() => setActiveView('dataHealth')}
-                            className={`px-3 py-1 font-semibold rounded-lg text-xs transition-colors shadow-sm flex items-center gap-1.5 ${
-                                activeView === 'dataHealth' 
-                                    ? 'bg-blue-600 text-white' 
-                                    : 'bg-white text-slate-600 border border-slate-300 hover:bg-slate-50'
-                            }`}
-                        >
-                            <span>Data Health Report</span>
-                            {dataValidationFlags.length > 0 && (
-                              <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-full ${
-                                activeView === 'dataHealth' ? 'bg-red-500 text-white' : 'bg-red-100 text-red-700'
-                              }`}>
-                                {dataValidationFlags.length}
-                              </span>
-                            )}
-                        </button>
-                      </div>
+            <div className="flex gap-2.5 flex-1 min-h-0 overflow-hidden">
+              {/* Left Drawer extends all the way to top with hamburger icon at top */}
+              <NavigationRail
+                activeView={activeView}
+                onNavigate={setActiveView}
+                dataValidationIssues={dataValidationFlags.length}
+                isExpanded={isNavExpanded}
+                onToggleExpand={() => setIsNavExpanded(prev => !prev)}
+              />
+
+              {/* Main content column with header at top beside drawer */}
+              <div className="flex-1 min-w-0 flex flex-col min-h-0 overflow-hidden">
+                <header className="mb-2 flex items-center justify-between flex-shrink-0 h-9">
+                  <div className="flex items-center gap-2">
+                    <h1 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight">Log review</h1>
+                    {(isbn || title || fileName) && (
+                      <span 
+                        className="hidden sm:inline-flex items-center gap-1 text-xs text-slate-500 font-medium border-l border-slate-300 pl-2 ml-0.5 truncate max-w-sm lg:max-w-md" 
+                        title={`${isbn ? `${isbn} — ` : ''}${title || fileName || ''}`}
+                      >
+                        {isbn && <span className="font-semibold text-slate-700">{isbn}</span>}
+                        {isbn && (title || fileName) && <span className="text-slate-400">·</span>}
+                        {(title || fileName) && <span className="truncate">{title || fileName}</span>}
+                      </span>
+                    )}
                   </div>
-                  
-                  <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                    {activeView === 'credits' && (
-                      <div className="flex-1 min-h-0 overflow-auto">
-                        <ResultsTable 
-                          coverData={coverData}
-                          nonCoverData={nonCoverData}
-                          dataValidationFlags={dataValidationFlags}
-                          onToggleRule={handleToggleRule}
-                          onDisableRule={(ruleId: string) => {
-                            setEnabledRuleIds(prev => {
-                              const next = new Set(prev);
-                              next.delete(ruleId);
-                              return next;
-                            });
-                          }}
-                          onDisableRules={(ruleIds: string[]) => {
-                            setEnabledRuleIds(prev => {
-                              const next = new Set(prev);
-                              ruleIds.forEach(id => next.delete(id));
-                              return next;
-                            });
-                          }}
-                        />
-                      </div>
+                  <div className="flex items-center gap-2">
+                    {contactSheetStatus === 'success' && imageAnalysisResults.length > 0 && (
+                      <button
+                        onClick={handleMergeAndDownload}
+                        disabled={isMerging}
+                        title="Merge & Download Data"
+                        className="flex items-center gap-1.5 px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-lg text-xs shadow-2xs transition-colors cursor-pointer"
+                      >
+                        <MergeIcon className="w-3.5 h-3.5" />
+                        <span>Merge</span>
+                      </button>
                     )}
+                    <button
+                      onClick={() => setShowClearConfirm(true)}
+                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-red-200 bg-white hover:bg-red-50 text-red-600 hover:text-red-700 font-medium text-xs transition-colors shadow-2xs cursor-pointer shrink-0"
+                      title="Clear uploaded log and return to upload screen"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                      <span>Clear Log</span>
+                    </button>
+                  </div>
+                </header>
 
-                    {activeView === 'uploadedLog' && (
-                      <UploadedLogView 
-                        rawData={rawData}
-                        headerRowIndex={headerRowIndex}
-                        columnIndices={columnIndices}
-                        dataValidationFlags={dataValidationFlags}
-                        fileName={fileName}
-                        enabledRuleIds={enabledRuleIds}
-                        onToggleRule={handleToggleRule}
-                        onDisableRule={(ruleId: string) => {
-                          setEnabledRuleIds(prev => {
-                            const next = new Set(prev);
-                            next.delete(ruleId);
-                            return next;
-                          });
-                        }}
-                        onDisableRules={(ruleIds: string[]) => {
-                          setEnabledRuleIds(prev => {
-                            const next = new Set(prev);
-                            ruleIds.forEach(id => next.delete(id));
-                            return next;
-                          });
-                        }}
-                        onOpenInfoPanel={() => setIsInfoPanelOpen(true)}
-                      />
-                    )}
+                <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                {activeView === 'credits' && (
+                  <div className="flex-1 min-h-0 overflow-auto bg-white border border-slate-200 rounded-xl p-2 shadow-2xs">
+                    <ResultsTable 
+                      coverData={coverData}
+                      nonCoverData={nonCoverData}
+                      dataValidationFlags={dataValidationFlags}
+                      onToggleRule={handleToggleRule}
+                      onDisableRule={(ruleId: string) => {
+                        setEnabledRuleIds(prev => {
+                          const next = new Set(prev);
+                          next.delete(ruleId);
+                          return next;
+                        });
+                      }}
+                      onDisableRules={(ruleIds: string[]) => {
+                        setEnabledRuleIds(prev => {
+                          const next = new Set(prev);
+                          ruleIds.forEach(id => next.delete(id));
+                          return next;
+                        });
+                      }}
+                    />
+                  </div>
+                )}
 
-                    {activeView === 'dataHealth' && (
-                      <div className="flex-1 min-h-0 overflow-auto">
-                        <DataHealthView
-                          dataValidationFlags={dataValidationFlags}
-                          rawValidationFlags={rawValidationFlags}
-                          enabledRuleIds={enabledRuleIds}
-                          onEnableAllRules={handleEnableAllRules}
-                          onDisableRule={(ruleId: string) => {
-                            setEnabledRuleIds(prev => {
-                              const next = new Set(prev);
-                              next.delete(ruleId);
-                              return next;
-                            });
-                          }}
-                          onDisableRules={(ruleIds: string[]) => {
-                            setEnabledRuleIds(prev => {
-                              const next = new Set(prev);
-                              ruleIds.forEach(id => next.delete(id));
-                              return next;
-                            });
-                          }}
-                          onToggleRule={handleToggleRule}
-                          onOpenInfoPanel={() => setIsInfoPanelOpen(true)}
-                          aiAnalysisStatus={aiAnalysisStatus}
-                          aiFlags={aiFlags}
-                          onRunAiAnalysis={handleRunAiAnalysis}
-                          originalRecordCount={originalRecordCount}
-                          onNavigateToLog={() => setActiveView('uploadedLog')}
-                        />
-                      </div>
-                    )}
+                {activeView === 'uploadedLog' && (
+                  <UploadedLogView 
+                    rawData={rawData}
+                    headerRowIndex={headerRowIndex}
+                    columnIndices={columnIndices}
+                    dataValidationFlags={dataValidationFlags}
+                    fileName={fileName}
+                    enabledRuleIds={enabledRuleIds}
+                    onToggleRule={handleToggleRule}
+                    onDisableRule={(ruleId: string) => {
+                      setEnabledRuleIds(prev => {
+                        const next = new Set(prev);
+                        next.delete(ruleId);
+                        return next;
+                      });
+                    }}
+                    onDisableRules={(ruleIds: string[]) => {
+                      setEnabledRuleIds(prev => {
+                        const next = new Set(prev);
+                        ruleIds.forEach(id => next.delete(id));
+                        return next;
+                      });
+                    }}
+                    onOpenInfoPanel={() => setIsInfoPanelOpen(true)}
+                  />
+                )}
+
+                {activeView === 'dataHealth' && (
+                  <div className="flex-1 min-h-0 overflow-auto bg-white border border-slate-200 rounded-xl p-2 shadow-2xs">
+                    <DataHealthView
+                      dataValidationFlags={dataValidationFlags}
+                      rawValidationFlags={rawValidationFlags}
+                      enabledRuleIds={enabledRuleIds}
+                      onEnableAllRules={handleEnableAllRules}
+                      onDisableRule={(ruleId: string) => {
+                        setEnabledRuleIds(prev => {
+                          const next = new Set(prev);
+                          next.delete(ruleId);
+                          return next;
+                        });
+                      }}
+                      onDisableRules={(ruleIds: string[]) => {
+                        setEnabledRuleIds(prev => {
+                          const next = new Set(prev);
+                          ruleIds.forEach(id => next.delete(id));
+                          return next;
+                        });
+                      }}
+                      onToggleRule={handleToggleRule}
+                      onOpenInfoPanel={() => setIsInfoPanelOpen(true)}
+                      aiAnalysisStatus={aiAnalysisStatus}
+                      aiFlags={aiFlags}
+                      onRunAiAnalysis={handleRunAiAnalysis}
+                      originalRecordCount={originalRecordCount}
+                      onNavigateToLog={() => setActiveView('uploadedLog')}
+                    />
+                  </div>
+                )}
                     
                     {activeView === 'analysis' && (
                       <div className="flex-1 min-h-0 overflow-auto">
@@ -1471,28 +1481,26 @@ const App: React.FC = () => {
                       </div>
                     )}
                   </div>
-
+                  </div>
+                  <InfoPanel 
+                    isOpen={isInfoPanelOpen}
+                    onToggle={() => setIsInfoPanelOpen(!isInfoPanelOpen)}
+                    fileName={fileName}
+                    originalRecordCount={originalRecordCount}
+                    totalSources={totalSources}
+                    coverCreditsCount={coverData.length}
+                    mainCreditsCount={nonCoverData.length}
+                    removedDuplicates={removedDuplicates}
+                    crossCategoryDuplicates={crossCategoryDuplicates}
+                    activeView={activeView}
+                    rawValidationFlags={rawValidationFlags}
+                    enabledRuleIds={enabledRuleIds}
+                    onToggleRule={handleToggleRule}
+                    onEnableAllRules={handleEnableAllRules}
+                    onDisableAllRules={handleDisableAllRules}
+                    onResetRules={handleResetRules}
+                  />
                 </div>
-              </div>
-              <InfoPanel 
-                isOpen={isInfoPanelOpen}
-                onToggle={() => setIsInfoPanelOpen(!isInfoPanelOpen)}
-                fileName={fileName}
-                originalRecordCount={originalRecordCount}
-                totalSources={totalSources}
-                coverCreditsCount={coverData.length}
-                mainCreditsCount={nonCoverData.length}
-                removedDuplicates={removedDuplicates}
-                crossCategoryDuplicates={crossCategoryDuplicates}
-                activeView={activeView}
-                rawValidationFlags={rawValidationFlags}
-                enabledRuleIds={enabledRuleIds}
-                onToggleRule={handleToggleRule}
-                onEnableAllRules={handleEnableAllRules}
-                onDisableAllRules={handleDisableAllRules}
-                onResetRules={handleResetRules}
-              />
-            </div>
 
             <ExportModal
                 isOpen={activeView === 'export'}
@@ -1545,24 +1553,18 @@ const App: React.FC = () => {
     }
   };
 
-  const menuItems = [
-    { label: 'Process Another file', onClick: handleReset },
-    { label: 'Help', onClick: () => {} }
-  ];
-
   return (
-    <main className="w-full px-3 py-2 h-screen max-h-screen flex flex-col overflow-hidden">
-      <div className="border-b border-slate-200 flex-shrink-0" style={{ marginBottom: '1px', height: '25.957099999999997px' }}>
-        <nav className="-mb-px flex space-x-6 items-center" aria-label="Tabs" style={{ marginBottom: '10px' }}>
+    <main className="w-full px-3 py-1.5 h-screen max-h-screen flex flex-col overflow-hidden bg-slate-50">
+      <div className="border-b border-slate-200 bg-white flex-shrink-0 -mx-3 -mt-1.5 px-3 mb-2 shadow-2xs">
+        <nav className="flex space-x-3 items-center h-8" aria-label="Tabs">
           <button
             onClick={() => setActiveTab('contactSheets')}
             title="Contact Sheets"
             className={`${
               activeTab === 'contactSheets'
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
-            } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium flex items-center gap-1.5`}
-            style={{ marginLeft: '9px', paddingTop: '2px', paddingBottom: '0px', height: '24px' }}
+                ? 'border-blue-600 text-blue-600 font-semibold'
+                : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800'
+            } whitespace-nowrap border-b-2 h-full px-2 text-xs flex items-center gap-1.5 transition-colors cursor-pointer`}
           >
             {!isAuthenticated && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
             <span>Contact Sheets</span>
@@ -1572,10 +1574,9 @@ const App: React.FC = () => {
             title="Filename Parser"
             className={`${
               activeTab === 'newFeature'
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
-            } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium flex items-center gap-1.5`}
-            style={{ paddingTop: '2px', paddingBottom: '0px', height: '24px' }}
+                ? 'border-blue-600 text-blue-600 font-semibold'
+                : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800'
+            } whitespace-nowrap border-b-2 h-full px-2 text-xs flex items-center gap-1.5 transition-colors cursor-pointer`}
           >
             {!isAuthenticated && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
             <span>FP</span>
@@ -1585,10 +1586,9 @@ const App: React.FC = () => {
             title="Credits Creator"
             className={`${
               activeTab === 'creditsCreator'
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
-            } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium flex items-center gap-1.5`}
-            style={{ height: '24px', paddingTop: '2px', paddingBottom: '0px' }}
+                ? 'border-blue-600 text-blue-600 font-semibold'
+                : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800'
+            } whitespace-nowrap border-b-2 h-full px-2 text-xs flex items-center gap-1.5 transition-colors cursor-pointer`}
           >
             {!isAuthenticated && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
             <span>CC</span>
@@ -1598,10 +1598,9 @@ const App: React.FC = () => {
             title="BMS Validation"
             className={`${
               activeTab === 'bmsValidation'
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
-            } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium flex items-center gap-1.5`}
-            style={{ height: '24px', paddingTop: '2px', paddingBottom: '0px' }}
+                ? 'border-blue-600 text-blue-600 font-semibold'
+                : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800'
+            } whitespace-nowrap border-b-2 h-full px-2 text-xs flex items-center gap-1.5 transition-colors cursor-pointer`}
           >
             {!isAuthenticated && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
             <span>BV</span>
@@ -1611,10 +1610,9 @@ const App: React.FC = () => {
             title="CS Extractor"
             className={`${
               activeTab === 'csExtractor'
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
-            } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium flex items-center gap-1.5`}
-            style={{ height: '24px', paddingTop: '2px', paddingBottom: '0px' }}
+                ? 'border-blue-600 text-blue-600 font-semibold'
+                : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800'
+            } whitespace-nowrap border-b-2 h-full px-2 text-xs flex items-center gap-1.5 transition-colors cursor-pointer`}
           >
             {!isAuthenticated && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
             <span>CSE</span>
@@ -1624,10 +1622,9 @@ const App: React.FC = () => {
             title="Log Review"
             className={`${
               activeTab === 'logReview'
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'
-            } whitespace-nowrap border-b-2 py-2 px-1 text-sm font-medium flex items-center gap-1.5`}
-            style={{ paddingTop: '2px', paddingBottom: '0px', height: '24px' }}
+                ? 'border-blue-600 text-blue-600 font-semibold'
+                : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800'
+            } whitespace-nowrap border-b-2 h-full px-2 text-xs flex items-center gap-1.5 transition-colors cursor-pointer`}
           >
             {!isAuthenticated && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
             <span>LR</span>
@@ -1637,7 +1634,7 @@ const App: React.FC = () => {
             <button
               onClick={() => setIsAuthenticated(false)}
               title="Lock protected tabs"
-              className="ml-auto flex items-center gap-1 text-xs text-slate-400 hover:text-slate-700 transition-colors py-0.5 px-2 rounded hover:bg-slate-100 cursor-pointer"
+              className="ml-auto flex items-center gap-1 text-xs text-slate-400 hover:text-slate-700 transition-colors py-1 px-2 rounded hover:bg-slate-100 cursor-pointer"
             >
               <Lock className="w-3 h-3" />
               <span>Lock</span>
@@ -1657,40 +1654,43 @@ const App: React.FC = () => {
       {activeTab === 'logReview' && (
         isAuthenticated ? (
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            <header className="mb-1.5 flex justify-between items-center flex-shrink-0">
-              <div className="flex items-center gap-4">
-                <DropdownMenu items={menuItems} />
-                <div className="text-left">
-                  <h1 className="text-2xl font-bold text-slate-800">A.M.H</h1>
-                  <p className="text-slate-500"></p>
+            {renderContent()}
+
+            {/* Confirmation dialog before clearing log */}
+            {showClearConfirm && (
+              <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-2xs flex items-center justify-center p-4">
+                <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-5 border border-slate-200 animate-scale-in">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-full bg-red-100 text-red-600 flex items-center justify-center shrink-0 mt-0.5">
+                      <Trash2 className="w-5 h-5 text-red-600" />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-slate-900 text-base">Clear Uploaded Log?</h3>
+                      <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                        Are you sure you want to remove the current log? All parsed records, validations, and edits will be cleared, returning to the upload screen.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2 mt-5 pt-3 border-t border-slate-100">
+                    <button
+                      onClick={() => setShowClearConfirm(false)}
+                      className="px-3.5 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-semibold transition-colors cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowClearConfirm(false);
+                        handleReset();
+                      }}
+                      className="px-3.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                    >
+                      Yes, Clear Log
+                    </button>
+                  </div>
                 </div>
               </div>
-              {status === 'success' && (
-                <div className="flex items-center gap-6">
-                  <div className="text-right min-w-0">
-                    {isbn && title && (
-                      <p
-                        className="text-lg font-semibold text-slate-800 truncate max-w-lg"
-                        title={`${isbn}_${title}`}
-                      >
-                        {`${isbn}_${title}`}
-                      </p>
-                    )}
-                  </div>
-                  <ActionsHeader 
-                    isMerging={isMerging}
-                    copyStatus={copyStatus}
-                    contactSheetStatus={contactSheetStatus}
-                    imageAnalysisResults={imageAnalysisResults}
-                    onMergeAndDownload={handleMergeAndDownload}
-                    onCopy={handleCopy}
-                  />
-                </div>
-              )}
-            </header>
-            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-              {renderContent()}
-            </div>
+            )}
           </div>
         ) : (
           renderPasswordForm('Log Review')

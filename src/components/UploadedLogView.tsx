@@ -57,6 +57,52 @@ const DEFAULT_VISIBLE_KEYWORDS = [
   'notes'
 ];
 
+export const STORAGE_KEY_COL_SETTINGS = 'assessment_log_column_settings_v1';
+
+export interface SavedColumnSettings {
+  widthsByHeader: Record<string, number>;
+  widthsByLetter: Record<string, number>;
+  widthsByIndex: Record<number, number>;
+  visibilityByHeader: Record<string, boolean>;
+  visibilityByLetter: Record<string, boolean>;
+  orderedHeaderKeys?: string[];
+  colWidthPreset?: 'tight' | 'normal' | 'wide' | 'fit' | 'custom';
+  isWrapEnabled?: boolean;
+}
+
+export const normalizeHeaderKey = (header: string): string => {
+  const clean = header.replace(/\s*\([a-z0-9]+\)$/i, '');
+  return clean.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+};
+
+export const getCanonicalHeaderKey = (header: string): string => {
+  const norm = normalizeHeaderKey(header);
+  if (norm === 'acknowledgement' || norm === 'acknowledgements') return 'acknowledgements';
+  if (norm === 'pagenumber' || norm === 'page' || norm === 'pages') return 'pagenumber';
+  if (norm === 'imagenumber' || norm === 'imagestatusno' || norm === 'imgno' || norm === 'imageno') return 'imageno';
+  if (norm === 'sources' || norm === 'source') return 'source';
+  return norm;
+};
+
+export const loadSavedColumnSettings = (): SavedColumnSettings | null => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_COL_SETTINGS);
+    if (!raw) return null;
+    return JSON.parse(raw) as SavedColumnSettings;
+  } catch (err) {
+    console.warn('Failed to load column settings from localStorage', err);
+    return null;
+  }
+};
+
+export const saveColumnSettings = (settings: SavedColumnSettings) => {
+  try {
+    localStorage.setItem(STORAGE_KEY_COL_SETTINGS, JSON.stringify(settings));
+  } catch (err) {
+    console.warn('Failed to save column settings to localStorage', err);
+  }
+};
+
 export type RowDensity = 'compact' | 'standard' | 'comfortable' | 'wrap';
 export type FontSize = 'small' | 'medium' | 'large';
 
@@ -105,13 +151,20 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
   const [isColumnManagerOpen, setIsColumnManagerOpen] = useState(false);
   const [colSearchQuery, setColSearchQuery] = useState('');
   
+  // Saved Column Settings on initial mount
+  const savedSettingsOnMount = useMemo(() => loadSavedColumnSettings(), []);
+
   // Custom Column Widths
   const [columnWidths, setColumnWidths] = useState<Record<number, number>>({});
-  const [colWidthPreset, setColWidthPreset] = useState<'tight' | 'normal' | 'wide' | 'fit' | 'custom'>('normal');
+  const [colWidthPreset, setColWidthPreset] = useState<'tight' | 'normal' | 'wide' | 'fit' | 'custom'>(() => {
+    return savedSettingsOnMount?.colWidthPreset ?? 'normal';
+  });
   const [resizingCol, setResizingCol] = useState<{ index: number; startX: number; startWidth: number } | null>(null);
 
-  // Row Density & Height Customization
-  const [rowDensity, setRowDensity] = useState<RowDensity>('standard');
+  // Row Wrapping & Height Customization
+  const [isWrapEnabled, setIsWrapEnabled] = useState<boolean>(() => {
+    return savedSettingsOnMount?.isWrapEnabled ?? false;
+  });
   const [fontSize, setFontSize] = useState<FontSize>('medium');
   const [zebraStriping, setZebraStriping] = useState(true);
   const [showGridlines, setShowGridlines] = useState(true);
@@ -295,7 +348,92 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
     return columns;
   }, [rawData, headerRowIndex]);
 
-  // Default visible column order
+  // Determine visible column order using saved settings if available
+  const computeColumnOrder = useCallback((columns: ColumnMeta[]): number[] => {
+    const saved = loadSavedColumnSettings();
+    if (!saved || (!saved.visibilityByHeader && !saved.visibilityByLetter && !saved.orderedHeaderKeys)) {
+      const list: number[] = [];
+      columns.forEach(col => {
+        if (col.isDefault) list.push(col.index);
+      });
+      if (list.length === 0 && columns.length > 0) {
+        columns.slice(0, 8).forEach(col => list.push(col.index));
+      }
+      return list;
+    }
+
+    const visibleIndices: number[] = [];
+    columns.forEach(col => {
+      const canonicalKey = getCanonicalHeaderKey(col.headerName);
+      const normKey = normalizeHeaderKey(col.headerName);
+      let isVisible: boolean | undefined = undefined;
+
+      if (saved.visibilityByHeader && saved.visibilityByHeader[canonicalKey] !== undefined) {
+        isVisible = saved.visibilityByHeader[canonicalKey];
+      } else if (saved.visibilityByHeader && saved.visibilityByHeader[normKey] !== undefined) {
+        isVisible = saved.visibilityByHeader[normKey];
+      } else if (saved.visibilityByLetter && saved.visibilityByLetter[col.letter] !== undefined) {
+        isVisible = saved.visibilityByLetter[col.letter];
+      }
+
+      if (isVisible !== undefined) {
+        if (isVisible) visibleIndices.push(col.index);
+      } else {
+        if (col.isDefault) visibleIndices.push(col.index);
+      }
+    });
+
+    if (visibleIndices.length === 0 && columns.length > 0) {
+      columns.slice(0, 8).forEach(col => visibleIndices.push(col.index));
+    }
+
+    if (saved.orderedHeaderKeys && saved.orderedHeaderKeys.length > 0) {
+      const orderMap = new Map<string, number>();
+      saved.orderedHeaderKeys.forEach((key, idx) => orderMap.set(key, idx));
+
+      visibleIndices.sort((a, b) => {
+        const colA = columns[a];
+        const colB = columns[b];
+        const keyA = colA ? getCanonicalHeaderKey(colA.headerName) : '';
+        const keyB = colB ? getCanonicalHeaderKey(colB.headerName) : '';
+        const letterA = colA ? colA.letter : '';
+        const letterB = colB ? colB.letter : '';
+
+        const rankA = orderMap.has(keyA) ? orderMap.get(keyA)! : (orderMap.has(letterA) ? orderMap.get(letterA)! : 9999 + a);
+        const rankB = orderMap.has(keyB) ? orderMap.get(keyB)! : (orderMap.has(letterB) ? orderMap.get(letterB)! : 9999 + b);
+        return rankA - rankB;
+      });
+    }
+
+    return visibleIndices;
+  }, []);
+
+  const computeColumnWidths = useCallback((columns: ColumnMeta[]): Record<number, number> => {
+    const saved = loadSavedColumnSettings();
+    if (!saved || (!saved.widthsByHeader && !saved.widthsByLetter && !saved.widthsByIndex)) {
+      return {};
+    }
+
+    const widths: Record<number, number> = {};
+    columns.forEach(col => {
+      const canonicalKey = getCanonicalHeaderKey(col.headerName);
+      const normKey = normalizeHeaderKey(col.headerName);
+
+      if (saved.widthsByHeader && saved.widthsByHeader[canonicalKey] !== undefined) {
+        widths[col.index] = saved.widthsByHeader[canonicalKey];
+      } else if (saved.widthsByHeader && saved.widthsByHeader[normKey] !== undefined) {
+        widths[col.index] = saved.widthsByHeader[normKey];
+      } else if (saved.widthsByLetter && saved.widthsByLetter[col.letter] !== undefined) {
+        widths[col.index] = saved.widthsByLetter[col.letter];
+      } else if (saved.widthsByIndex && saved.widthsByIndex[col.index] !== undefined) {
+        widths[col.index] = saved.widthsByIndex[col.index];
+      }
+    });
+
+    return widths;
+  }, []);
+
+  // Default visible column order (for reset to default)
   const defaultColOrder = useMemo(() => {
     const list: number[] = [];
     allColumns.forEach(col => {
@@ -308,16 +446,100 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
   }, [allColumns]);
 
   // Current visible columns in user-defined order
-  const [columnOrder, setColumnOrder] = useState<number[]>(() => defaultColOrder);
+  const [columnOrder, setColumnOrder] = useState<number[]>(() => computeColumnOrder(allColumns));
+  const isSyncingFromDataRef = useRef(false);
 
-  // Sync when dataset changes
+  // Sync when dataset changes (e.g. new file uploaded)
   useEffect(() => {
-    setColumnOrder(defaultColOrder);
-    setColumnWidths({});
+    if (!allColumns || allColumns.length === 0) return;
+    isSyncingFromDataRef.current = true;
+
+    const initialOrder = computeColumnOrder(allColumns);
+    const initialWidths = computeColumnWidths(allColumns);
+    const saved = loadSavedColumnSettings();
+
+    setColumnOrder(initialOrder);
+    setColumnWidths(initialWidths);
+    if (saved?.colWidthPreset) {
+      setColWidthPreset(saved.colWidthPreset);
+    }
+    if (saved?.isWrapEnabled !== undefined) {
+      setIsWrapEnabled(saved.isWrapEnabled);
+    }
     setSortConfig({ colIndex: null, direction: null });
     setCurrentPage(1);
     setSelectedCell(null);
-  }, [defaultColOrder]);
+
+    const timer = setTimeout(() => {
+      isSyncingFromDataRef.current = false;
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [allColumns, computeColumnOrder, computeColumnWidths]);
+
+  // Persist column widths & visibility settings to localStorage whenever changed
+  const persistCurrentSettings = useCallback((
+    currentWidths: Record<number, number>,
+    currentOrder: number[],
+    currentCols: ColumnMeta[],
+    currentPreset?: 'tight' | 'normal' | 'wide' | 'fit' | 'custom',
+    currentWrap?: boolean
+  ) => {
+    if (!currentCols || currentCols.length === 0 || !currentOrder || currentOrder.length === 0) return;
+
+    const existing = loadSavedColumnSettings() || {
+      widthsByHeader: {},
+      widthsByLetter: {},
+      widthsByIndex: {},
+      visibilityByHeader: {},
+      visibilityByLetter: {},
+      orderedHeaderKeys: []
+    };
+
+    const widthsByHeader = { ...existing.widthsByHeader };
+    const widthsByLetter = { ...existing.widthsByLetter };
+    const widthsByIndex = { ...existing.widthsByIndex };
+    const visibilityByHeader = { ...existing.visibilityByHeader };
+    const visibilityByLetter = { ...existing.visibilityByLetter };
+
+    const visibleSet = new Set(currentOrder);
+
+    currentCols.forEach(col => {
+      const canonicalKey = getCanonicalHeaderKey(col.headerName);
+      const isVisible = visibleSet.has(col.index);
+
+      visibilityByHeader[canonicalKey] = isVisible;
+      visibilityByLetter[col.letter] = isVisible;
+
+      if (currentWidths[col.index] !== undefined) {
+        widthsByHeader[canonicalKey] = currentWidths[col.index];
+        widthsByLetter[col.letter] = currentWidths[col.index];
+        widthsByIndex[col.index] = currentWidths[col.index];
+      }
+    });
+
+    const orderedHeaderKeys = currentOrder.map(idx => {
+      const col = currentCols[idx];
+      return col ? getCanonicalHeaderKey(col.headerName) : '';
+    }).filter(Boolean);
+
+    saveColumnSettings({
+      widthsByHeader,
+      widthsByLetter,
+      widthsByIndex,
+      visibilityByHeader,
+      visibilityByLetter,
+      orderedHeaderKeys,
+      colWidthPreset: currentPreset,
+      isWrapEnabled: currentWrap
+    });
+  }, []);
+
+  useEffect(() => {
+    if (isSyncingFromDataRef.current) return;
+    if (!allColumns || allColumns.length === 0 || columnOrder.length === 0) return;
+
+    persistCurrentSettings(columnWidths, columnOrder, allColumns, colWidthPreset, isWrapEnabled);
+  }, [columnWidths, columnOrder, allColumns, colWidthPreset, isWrapEnabled, persistCurrentSettings]);
 
   const visibleColumnSet = useMemo(() => new Set(columnOrder), [columnOrder]);
 
@@ -696,29 +918,17 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
 
   // Density classes for rows and cells
   const getDensityRowClasses = () => {
-    switch (rowDensity) {
-      case 'compact':
-        return 'h-7 max-h-7 leading-7';
-      case 'standard':
-        return 'h-9 max-h-9 leading-9';
-      case 'comfortable':
-        return 'min-h-[52px] py-1.5 leading-normal';
-      case 'wrap':
-        return 'min-h-[44px] py-2 leading-relaxed';
+    if (isWrapEnabled) {
+      return 'min-h-[40px] py-1.5 leading-normal';
     }
+    return 'h-9 max-h-9 leading-9';
   };
 
   const getDensityCellClasses = () => {
-    switch (rowDensity) {
-      case 'compact':
-        return 'whitespace-nowrap overflow-hidden text-ellipsis';
-      case 'standard':
-        return 'whitespace-nowrap overflow-hidden text-ellipsis';
-      case 'comfortable':
-        return 'line-clamp-2 overflow-hidden';
-      case 'wrap':
-        return 'whitespace-normal break-words';
+    if (isWrapEnabled) {
+      return 'whitespace-normal break-words py-0.5';
     }
+    return 'whitespace-nowrap overflow-hidden text-ellipsis';
   };
 
   const getFontSizeClass = () => {
@@ -821,76 +1031,10 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
               )}
             </button>
           </div>
-        </div>
-
-        {/* Right Side: View Customizations, Columns, Height, Width, Export */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* Jump to Row */}
-          <form onSubmit={handleJumpToRow} className="flex items-center gap-1">
-            <input
-              type="number"
-              min="1"
-              max={rawData.length}
-              value={jumpRowInput}
-              onChange={(e) => setJumpRowInput(e.target.value)}
-              placeholder="Row #"
-              className="w-16 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-1.5 focus:ring-blue-500 bg-white shadow-2xs text-center tabular-nums"
-              title="Enter Excel row number to scroll directly to it"
-            />
-            <button
-              type="submit"
-              className="p-1.5 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg text-slate-600 shadow-2xs transition-colors"
-              title="Jump to row"
-            >
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-          </form>
 
           <div className="h-4 w-px bg-slate-200" />
 
-          {/* Row Height & Density Switcher */}
-          <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200" title="Customize row height / wrapping">
-            <span className="text-[10px] font-bold text-slate-500 uppercase px-1.5 select-none">Rows:</span>
-            <button
-              onClick={() => setRowDensity('compact')}
-              className={`px-2 py-1 text-xs font-medium rounded-md transition-colors ${
-                rowDensity === 'compact' ? 'bg-white text-slate-900 shadow-2xs font-semibold' : 'text-slate-600 hover:text-slate-900'
-              }`}
-              title="Compact rows (28px height, maximum data density)"
-            >
-              Tight
-            </button>
-            <button
-              onClick={() => setRowDensity('standard')}
-              className={`px-2 py-1 text-xs font-medium rounded-md transition-colors ${
-                rowDensity === 'standard' ? 'bg-white text-slate-900 shadow-2xs font-semibold' : 'text-slate-600 hover:text-slate-900'
-              }`}
-              title="Standard rows (38px height, balanced)"
-            >
-              Normal
-            </button>
-            <button
-              onClick={() => setRowDensity('comfortable')}
-              className={`px-2 py-1 text-xs font-medium rounded-md transition-colors ${
-                rowDensity === 'comfortable' ? 'bg-white text-slate-900 shadow-2xs font-semibold' : 'text-slate-600 hover:text-slate-900'
-              }`}
-              title="Comfortable preview (52px height, 2-line preview)"
-            >
-              Relaxed
-            </button>
-            <button
-              onClick={() => setRowDensity('wrap')}
-              className={`px-2 py-1 text-xs font-medium rounded-md transition-colors flex items-center gap-1 ${
-                rowDensity === 'wrap' ? 'bg-blue-600 text-white shadow-2xs font-semibold' : 'text-slate-600 hover:text-slate-900'
-              }`}
-              title="Full Text Wrap: Displays complete acknowledgements and citations without truncation!"
-            >
-              <WrapText className="w-3.5 h-3.5" />
-              <span>Wrap</span>
-            </button>
-          </div>
-
-          {/* Column Width Switcher */}
+          {/* Column Width Quick Buttons: Tight, Normal, Wide, Fit Data */}
           <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200" title="Customize column widths">
             <span className="text-[10px] font-bold text-slate-500 uppercase px-1.5 select-none">Cols:</span>
             <button
@@ -943,6 +1087,47 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
               <span>Fit Data</span>
             </button>
           </div>
+
+          {/* Dedicated Wrap Toggle Button */}
+          <button
+            onClick={() => setIsWrapEnabled(prev => !prev)}
+            className={`px-2.5 py-1 text-xs font-medium rounded-lg border transition-colors flex items-center gap-1.5 shadow-2xs ${
+              isWrapEnabled
+                ? 'bg-blue-600 text-white border-blue-600 font-semibold shadow-xs'
+                : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+            }`}
+            title={isWrapEnabled ? "Wrap is ON: Click to disable text wrapping" : "Wrap is OFF: Click to enable text wrapping"}
+          >
+            <WrapText className="w-3.5 h-3.5" />
+            <span>Wrap</span>
+            {isWrapEnabled && <span className="w-1.5 h-1.5 rounded-full bg-white ml-0.5" />}
+          </button>
+        </div>
+
+        {/* Right Side: Jump to Row, Columns, View Customizations, Export */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Jump to Row */}
+          <form onSubmit={handleJumpToRow} className="flex items-center gap-1">
+            <input
+              type="number"
+              min="1"
+              max={rawData.length}
+              value={jumpRowInput}
+              onChange={(e) => setJumpRowInput(e.target.value)}
+              placeholder="Row #"
+              className="w-16 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-1.5 focus:ring-blue-500 bg-white shadow-2xs text-center tabular-nums"
+              title="Enter Excel row number to scroll directly to it"
+            />
+            <button
+              type="submit"
+              className="p-1.5 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg text-slate-600 shadow-2xs transition-colors"
+              title="Jump to row"
+            >
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </form>
+
+          <div className="h-4 w-px bg-slate-200" />
 
           {/* Column Customizer Toggle */}
           <button
@@ -1271,10 +1456,10 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
       )}
 
       {/* ========================================================================= */}
-      {/* 3. ACTIVE CELL FORMULA & VALUE INSPECTION BAR                            */}
+      {/* 3. ACTIVE CELL FORMULA & VALUE INSPECTION BAR (Shown when cell clicked)   */}
       {/* ========================================================================= */}
-      <div className="bg-white border border-slate-200 rounded-lg px-3 py-1.5 flex items-center justify-between gap-3 text-xs shadow-2xs min-h-[36px] flex-shrink-0 w-full">
-        {selectedCell ? (
+      {selectedCell && (
+        <div className="bg-white border border-slate-200 rounded-lg px-3 py-1.5 flex items-center justify-between gap-3 text-xs shadow-2xs min-h-[36px] flex-shrink-0 w-full animate-fade-in-fast">
           <div className="flex items-center gap-2.5 w-full min-w-0">
             {/* Cell Coordinate Badge */}
             <span className="shrink-0 bg-blue-100 text-blue-900 font-mono font-bold text-[11px] px-2 py-0.5 rounded border border-blue-200 flex items-center gap-1">
@@ -1317,7 +1502,7 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
             {/* Inspect Entire Row Button */}
             <button
               onClick={() => handleInspectRowByNumber(selectedCell.excelRowNumber)}
-              className="shrink-0 text-[11px] font-semibold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 rounded transition-colors"
+              className="shrink-0 text-[11px] font-semibold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 rounded transition-colors cursor-pointer"
               title="Open full row details modal"
             >
               Inspect Row
@@ -1327,7 +1512,7 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
             {selectedCell.value && (
               <button
                 onClick={handleCopyActiveCell}
-                className="shrink-0 text-[11px] flex items-center gap-1 text-slate-600 hover:text-blue-600 hover:bg-slate-100 px-2 py-0.5 rounded transition-colors"
+                className="shrink-0 text-[11px] flex items-center gap-1 text-slate-600 hover:text-blue-600 hover:bg-slate-100 px-2 py-0.5 rounded transition-colors cursor-pointer"
                 title="Copy cell text"
               >
                 {cellCopyStatus === 'copied' ? <Check className="w-3 h-3 text-emerald-600" /> : <CopyIcon className="w-3 h-3 text-slate-400" />}
@@ -1338,21 +1523,14 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
             {/* Clear Selection */}
             <button
               onClick={() => setSelectedCell(null)}
-              className="text-slate-400 hover:text-slate-600 p-0.5 rounded shrink-0"
+              className="text-slate-400 hover:text-slate-600 p-0.5 rounded shrink-0 cursor-pointer"
               title="Clear selection"
             >
               <CloseIcon className="w-3.5 h-3.5" />
             </button>
           </div>
-        ) : (
-          <div className="flex items-center gap-2 text-slate-500 text-xs">
-            <Info className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-            <span>
-              Click any cell to inspect its full unabbreviated content here. Drag column header edges to resize width. Double-click any row to view complete record.
-            </span>
-          </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* 4. MAIN DATA SHEET TABLE WITH RESIZABLE COLUMNS & CUSTOM HEIGHT/WRAP     */}
@@ -1397,36 +1575,36 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
                   const isSorted = sortConfig.colIndex === col.index;
                   const isFirstFrozen = freezeFirstCol && idx === 0;
 
+                  // Clean header and format as: Header Name (Letter) e.g., Usage Classification (B), Source (E)
+                  const cleanHeader = col.headerName.replace(new RegExp(`\\s*\\(${col.letter}\\)$`, 'i'), '').trim();
+                  const headerDisplayName = `${cleanHeader} (${col.letter})`;
+
                   return (
                     <th
                       key={col.index}
                       scope="col"
-                      className={`relative px-1.5 py-0 text-left font-bold text-slate-800 border-r border-b border-slate-300 bg-slate-100 select-none group transition-colors overflow-hidden ${
+                      className={`relative p-0 text-left font-bold text-slate-800 border-r border-b border-slate-300 bg-slate-100 select-none group transition-colors overflow-hidden ${
                         isFirstFrozen ? 'sticky left-14 z-30 shadow-md bg-slate-100 border-r-2 border-r-blue-300' : ''
                       }`}
                       style={{ width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }}
                     >
-                      <div className="flex items-center justify-between gap-0.5 h-9 overflow-hidden">
-                        {/* Header Label & Letter (Clickable to Sort) */}
+                      <div className="flex items-center justify-between gap-0.5 h-9 px-0 overflow-hidden">
+                        {/* Header Label & Letter (Clickable to Sort) - zero padding to start right from the edge */}
                         <div 
                           onClick={() => handleSortColumn(col.index)}
-                          className="flex items-center gap-1 min-w-0 flex-1 cursor-pointer hover:text-blue-700 overflow-hidden"
-                          title={`${col.letter}: ${col.headerName} (Click to sort)`}
+                          className="flex items-center min-w-0 flex-1 cursor-pointer hover:text-blue-700 overflow-hidden px-0"
+                          title={`${headerDisplayName} (Click to sort)`}
                         >
-                          <span className={`font-mono text-[10px] px-1 py-0.2 rounded font-bold shrink-0 ${
-                            col.isDefault ? 'bg-blue-100 text-blue-900' : 'bg-slate-200 text-slate-700'
-                          }`}>
-                            {col.letter}
+                          <span 
+                            className="truncate font-semibold text-[11px] min-w-0 text-slate-800 hover:text-blue-700 pl-0" 
+                            title={headerDisplayName}
+                          >
+                            {cleanHeader} <span className="font-mono text-[10px] font-bold text-slate-500">({col.letter})</span>
                           </span>
-                          {width >= 70 && (
-                            <span className="truncate font-semibold text-[11px] min-w-0" title={col.headerName}>
-                              {col.headerName}
-                            </span>
-                          )}
 
                           {/* Sort Indicator */}
                           {isSorted && (
-                            <span className="shrink-0 text-blue-600">
+                            <span className="shrink-0 text-blue-600 ml-0.5">
                               {sortConfig.direction === 'asc' ? (
                                 <ArrowUp className="w-3 h-3" />
                               ) : (
@@ -1437,7 +1615,7 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
                         </div>
 
                         {/* Column Header Dropdown Menu Trigger */}
-                        {width >= 65 && (
+                        {width >= 60 && (
                           <div className="relative header-menu-container shrink-0">
                             <button
                               onClick={(e) => {

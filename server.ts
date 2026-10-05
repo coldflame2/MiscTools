@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
+import { GoogleGenAI, Type } from '@google/genai';
 
 async function resolveAndDownloadOnlineExcel(inputUrl: string): Promise<Buffer> {
   let url = inputUrl.trim();
@@ -294,6 +295,181 @@ async function startServer() {
     } catch (error: any) {
       console.error('[Sync Error]', error);
       return res.status(500).json({ error: error?.message || 'Failed to sync online file.' });
+    }
+  });
+
+  // Gemini AI Client Utility
+  const getGeminiClient = () => {
+    const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+    if (!apiKey) {
+      throw new Error('GEMINI_API_KEY is not configured on the server.');
+    }
+    return new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+  };
+
+  // API route for AI Acknowledgements Analysis
+  app.post('/api/gemini/analyze-acknowledgements', async (req, res) => {
+    try {
+      const { records } = req.body;
+      if (!Array.isArray(records) || records.length === 0) {
+        return res.json({ flaggedRecords: [] });
+      }
+
+      const ai = getGeminiClient();
+      const MAX_RETRIES = 3;
+      let lastError: any = null;
+
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        try {
+          const response = await ai.models.generateContent({
+            model: 'gemini-3.8-flash',
+            contents: `You are a data quality analyst reviewing a JSON list of image acknowledgements. 
+
+Your job is to identify and flag records that appear incorrect, incomplete, inconsistent, or improperly formatted. 
+
+For each flagged record: 
+- Add a concise flag label (for example: "Redundant vendor", "Placeholder", "Misspelling", "Non-preferred vendor conflict"). 
+- Provide a one-sentence concise explanation for why it was flagged. 
+
+Vendor Normalization Rules: 
+Other vendors are acceptable too, but there are some preferred vendos. They must appear exactly as written, with exact casing, spelling, and spacing as follows: 
+- Shutterstock 
+- Getty Images 
+- Alamy Stock Photo 
+- Bridgeman Images 
+- Mauritius Images 
+- Reuters 
+- Science Photo Library 
+- Nature Photo Library 
+- OUP 
+
+Source and Acknowledgement Relationship Rules 
+1. Acknowledgement CAN contain any other non-preferred vendors but must NOT contain same vendor as its source or another preferred vendor name anywhere. The only exception is if there’s only source name in acknowledgement, then only the source vendor can be the acknowledgement. 
+
+Here are some examples: 
+Source: Shutterstock. Acknowledgement: Shutterstock (Valid. Reason: only contributor in acknowledgement but same as source) 
+Source: Shutterstock. Acknowledgement: Getty Images (Invalid and to Flag. reason: only contributor in acknowledgement but NOT the source and is from the preferred list)
+Source: Shutterstock. Acknowledgement: iStock (Valid. reason: only contributor in acknowledgement and is NOT the source and is NOT from the preferred list)
+Source: iStock. Acknowledgement: John Smith/iStock (Invalid and to Flag. reason: source as contributor in acknowledgement when other contributors exist) 
+Source: Shutterstock. Acknowledgement: John Smith/Shutterstock (Invalid and to Flag. reason: source in acknowledgement when there are other contributors) 
+Source: Shutterstock. Acknowledgement: John Smith/iStock (Valid. reason: Other vendors in acknowledgement but not the source or from preferred vendors list)
+Source: Corbis / Acknowledgement: Corbis (Valid. Reason: only source vendor, even though non-preferred, in acknowledgement) 
+Source: Getty Images / Acknowledgement: Corbis/John Smith/iStock (Valid. reason: source Getty not as contributor in acknowledgement and no other preferred non-source vendor in acknowledgement)
+
+Other Error Types to Flag 
+Placeholder or junk: "test", "end", "null", "xxx", "NA" | Temporary or meaningless filler, clear typos. 
+Descriptive text only: "white kitten on table" | Descriptions are not valid acknowledgements 
+URL or ID strings: "www.shutterstock.com/12345", "123456789" | Should not contain URLs or numeric IDs 
+Formatting errors: "Alamy Stock Photo." | Trailing punctuation or spacing issues 
+Casing inconsistency: "reuters", "Getty images", "alamy stock photo" | Must match exact casing and spacing 
+Whitespace or empty string: Invalid or empty acknowledgement 
+Any other clear inconsistencies. 
+
+Data: ${JSON.stringify(records)}`,
+            config: {
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    source: { type: Type.STRING },
+                    acknowledgement: { type: Type.STRING },
+                    pageNumber: { type: Type.STRING },
+                    reason: {
+                      type: Type.STRING,
+                      description: 'A brief, one-sentence explanation for why this record is flagged as an anomaly.',
+                    },
+                  },
+                  required: ['source', 'acknowledgement', 'pageNumber', 'reason'],
+                },
+              },
+            },
+          });
+
+          const jsonText = response.text ? response.text.trim() : '';
+          const flaggedRecords = jsonText ? JSON.parse(jsonText) : [];
+          return res.json({ flaggedRecords });
+        } catch (err: any) {
+          lastError = err;
+          const errMsg = err instanceof Error ? err.message : String(err);
+          if (errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('429')) {
+            const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
+            console.warn(`[Gemini API] Rate limit hit. Retrying in ${delay.toFixed(0)}ms... (Attempt ${attempt + 1}/${MAX_RETRIES})`);
+            await new Promise(r => setTimeout(r, delay));
+          } else {
+            console.error('[Gemini API Error]', err);
+            return res.status(500).json({ error: errMsg || 'AI analysis encountered an error' });
+          }
+        }
+      }
+
+      console.error('[Gemini API Error] Exceeded retries', lastError);
+      return res.status(429).json({ error: 'AI analysis rate limit exceeded. Please try again shortly.' });
+    } catch (outerErr: any) {
+      console.error('[Gemini API Route Error]', outerErr);
+      return res.status(500).json({ error: outerErr?.message || 'Internal server error during AI analysis' });
+    }
+  });
+
+  // API route for AI Image Description
+  app.post('/api/gemini/describe-image', async (req, res) => {
+    try {
+      const { imageBase64, mimeType } = req.body;
+      if (!imageBase64) {
+        return res.status(400).json({ error: 'imageBase64 is required' });
+      }
+
+      const ai = getGeminiClient();
+      const MAX_RETRIES = 3;
+      let lastError: any = null;
+
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        try {
+          const imagePart = {
+            inlineData: {
+              data: imageBase64,
+              mimeType: mimeType || 'image/jpeg',
+            },
+          };
+
+          const textPart = {
+            text: 'Describe the main subject of this image in one brief sentence.',
+          };
+
+          const response = await ai.models.generateContent({
+            model: 'gemini-3.8-flash',
+            contents: { parts: [imagePart, textPart] },
+          });
+
+          const description = response.text ? response.text.trim() : '';
+          return res.json({ description });
+        } catch (err: any) {
+          lastError = err;
+          const errMsg = err instanceof Error ? err.message : String(err);
+          if (errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('429')) {
+            const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
+            console.warn(`[Gemini API] Rate limit hit describing image. Retrying in ${delay.toFixed(0)}ms... (Attempt ${attempt + 1}/${MAX_RETRIES})`);
+            await new Promise(r => setTimeout(r, delay));
+          } else {
+            console.error('[Gemini API Describe Error]', err);
+            return res.status(500).json({ error: errMsg || 'AI image description encountered an error' });
+          }
+        }
+      }
+
+      console.error('[Gemini API Describe Error] Exceeded retries', lastError);
+      return res.status(429).json({ error: 'AI description rate limit exceeded. Please wait and try again.' });
+    } catch (outerErr: any) {
+      console.error('[Gemini API Route Error]', outerErr);
+      return res.status(500).json({ error: outerErr?.message || 'Internal server error during AI description' });
     }
   });
 
