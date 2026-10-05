@@ -149,6 +149,196 @@ export const parseTwoPartNote = (noteText: string): TwoPartNoteData | null => {
   };
 };
 
+export interface PageSequenceInfo {
+  raw: string;
+  isCover: boolean;
+  coverIndex: number; // e.g. 1 for CVR or CVR(1), 2 for CVR(2), etc.
+  isNormalPage: boolean;
+  normalPageNumber: number; // e.g. 1, 2, 3...
+  isValidFormat: boolean;
+  formatErrorMessage?: string;
+}
+
+export const parsePageSequenceInfo = (pageStr: string): PageSequenceInfo => {
+  const clean = pageStr.trim();
+  if (!clean) {
+    return {
+      raw: clean,
+      isCover: false,
+      coverIndex: 0,
+      isNormalPage: false,
+      normalPageNumber: 0,
+      isValidFormat: false,
+      formatErrorMessage: 'Page Number is required.'
+    };
+  }
+
+  const lower = clean.toLowerCase();
+
+  // 1. Check for invalid CVR(0) or negative/non-positive indices
+  const cvrZeroOrInvalid = clean.match(/^cvr\s*\(\s*([-\d]+)\s*\)$/i);
+  if (cvrZeroOrInvalid) {
+    const num = parseInt(cvrZeroOrInvalid[1], 10);
+    if (isNaN(num) || num < 1) {
+      return {
+        raw: clean,
+        isCover: true,
+        coverIndex: 0,
+        isNormalPage: false,
+        normalPageNumber: 0,
+        isValidFormat: false,
+        formatErrorMessage: `Page Number "${clean}" is invalid. CVR(n) page index must be a positive integer starting with 1 (e.g. CVR(1), CVR(2)).`
+      };
+    }
+  }
+
+  // 2. Check for valid CVR or CVR(n) or CVR n (case-insensitive, n >= 1)
+  const cvrMatch = clean.match(/^cvr(?:\s*\(\s*([1-9]\d*)\s*\)|\s*([1-9]\d*))?$/i);
+  if (cvrMatch) {
+    const n = cvrMatch[1] || cvrMatch[2];
+    const coverIndex = n ? parseInt(n, 10) : 1;
+    return {
+      raw: clean,
+      isCover: true,
+      coverIndex,
+      isNormalPage: false,
+      normalPageNumber: 0,
+      isValidFormat: true
+    };
+  }
+
+  // 3. Check for other standard cover formats (cover, cov, c, fc, ifc, ibc, bc)
+  if (lower === 'c' || lower === 'cover' || lower === 'cov' || lower === 'front cover' || lower === 'fc') {
+    return {
+      raw: clean,
+      isCover: true,
+      coverIndex: 1,
+      isNormalPage: false,
+      normalPageNumber: 0,
+      isValidFormat: true
+    };
+  }
+  if (lower === 'ifc' || lower === 'inside front cover') {
+    return {
+      raw: clean,
+      isCover: true,
+      coverIndex: 2,
+      isNormalPage: false,
+      normalPageNumber: 0,
+      isValidFormat: true
+    };
+  }
+  if (lower === 'ibc' || lower === 'inside back cover') {
+    return {
+      raw: clean,
+      isCover: true,
+      coverIndex: 3,
+      isNormalPage: false,
+      normalPageNumber: 0,
+      isValidFormat: true
+    };
+  }
+  if (lower === 'bc' || lower === 'back cover') {
+    return {
+      raw: clean,
+      isCover: true,
+      coverIndex: 4,
+      isNormalPage: false,
+      normalPageNumber: 0,
+      isValidFormat: true
+    };
+  }
+
+  // 4. Check for normal page formats (p01, p1, 1, 12, 12a, 12-13, etc.)
+  const pageDigitsMatch = clean.match(/^(?:p\s*)?(\d+)(?:([a-z])|[-–/]\d+)?$/i);
+  if (pageDigitsMatch) {
+    const mainNum = parseInt(pageDigitsMatch[1], 10);
+    let subFraction = 0;
+    if (pageDigitsMatch[2]) {
+      subFraction = (pageDigitsMatch[2].toLowerCase().charCodeAt(0) - 96) * 0.001;
+    }
+    return {
+      raw: clean,
+      isCover: false,
+      coverIndex: 0,
+      isNormalPage: true,
+      normalPageNumber: mainNum + subFraction,
+      isValidFormat: true
+    };
+  }
+
+  // 5. Roman numeral prelims (e.g. i, ii, iii, iv, v, vi, vii, viii, ix, x, xi, xii)
+  const romanMatch = clean.match(/^(?:p\s*)?(i|ii|iii|iv|v|vi|vii|viii|ix|x|xi|xii|xiii|xiv|xv|xvi|xvii|xviii|xix|xx)$/i);
+  if (romanMatch) {
+    const romanMap: Record<string, number> = {
+      i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10,
+      xi: 11, xii: 12, xiii: 13, xiv: 14, xv: 15, xvi: 16, xvii: 17, xviii: 18, xix: 19, xx: 20
+    };
+    const rVal = romanMap[romanMatch[1].toLowerCase()] || 1;
+    return {
+      raw: clean,
+      isCover: false,
+      coverIndex: 0,
+      isNormalPage: true,
+      normalPageNumber: 0.0001 * rVal,
+      isValidFormat: true
+    };
+  }
+
+  // Generic fallback if any digits exist in the string
+  const genericNumberMatch = clean.match(/\d+/);
+  if (genericNumberMatch) {
+    return {
+      raw: clean,
+      isCover: false,
+      coverIndex: 0,
+      isNormalPage: true,
+      normalPageNumber: parseInt(genericNumberMatch[0], 10),
+      isValidFormat: true
+    };
+  }
+
+  return {
+    raw: clean,
+    isCover: false,
+    coverIndex: 0,
+    isNormalPage: false,
+    normalPageNumber: 0,
+    isValidFormat: true
+  };
+};
+
+export const comparePageValues = (a: any, b: any): number => {
+  const strA = String(a ?? '').trim();
+  const strB = String(b ?? '').trim();
+
+  if (!strA && !strB) return 0;
+  if (!strA) return 1;
+  if (!strB) return -1;
+
+  const infoA = parsePageSequenceInfo(strA);
+  const infoB = parsePageSequenceInfo(strB);
+
+  // If both are covers, sort by cover index (e.g. CVR(1) < CVR(2) < CVR(3))
+  if (infoA.isCover && infoB.isCover) {
+    return infoA.coverIndex - infoB.coverIndex;
+  }
+  // Cover entries always come before normal pages
+  if (infoA.isCover && !infoB.isCover) {
+    return -1;
+  }
+  if (!infoA.isCover && infoB.isCover) {
+    return 1;
+  }
+
+  // If both are normal pages, sort numerically
+  if (infoA.isNormalPage && infoB.isNormalPage) {
+    return infoA.normalPageNumber - infoB.normalPageNumber;
+  }
+
+  return strA.localeCompare(strB, undefined, { numeric: true, sensitivity: 'base' });
+};
+
 /**
  * Validates records based on the LR / AMH log rules.
  * @param rawData - The raw data array from the Excel sheet or pasted table.
@@ -230,18 +420,7 @@ export const validateData = (
 
   const detectedPageStyle = pPrefixCount >= digitsLetterCount && pPrefixCount > 0 ? 'p_prefix' : 'digits';
 
-  let prevPageNumeric: number | null = null;
   let prevPageStr = '';
-
-  const parsePageNumeric = (pageStr: string): number | null => {
-    const clean = pageStr.trim().toLowerCase();
-    if (clean === 'c' || clean.includes('cover')) return 0;
-    const match = clean.match(/\d+/);
-    if (match) {
-      return parseInt(match[0], 10);
-    }
-    return null;
-  };
 
   // --- ROW-BY-ROW VALIDATION ---
   for (let i = headerRowIndex + 1; i <= lastDataRowIndex; i++) {
@@ -339,24 +518,27 @@ export const validateData = (
     if (!pageVal) {
       getOrCreateFlaggedRecord(i).reasons.push('Page Number is required.');
     } else {
-      // Style consistency check
-      if (detectedPageStyle === 'p_prefix' && !/^p\d+/i.test(pageVal) && pageVal.toLowerCase() !== 'c' && !pageVal.toLowerCase().includes('cover')) {
-        getOrCreateFlaggedRecord(i).reasons.push(`Page Number "${pageVal}" does not match the established "p000" style of the log.`);
-      } else if (detectedPageStyle === 'digits' && /^p\d+/i.test(pageVal)) {
-        getOrCreateFlaggedRecord(i).reasons.push(`Page Number "${pageVal}" is inconsistent with the numerical page format of the log.`);
+      const pageInfo = parsePageSequenceInfo(pageVal);
+
+      // Check for format error (e.g. CVR(0) or negative/invalid page format)
+      if (!pageInfo.isValidFormat && pageInfo.formatErrorMessage) {
+        getOrCreateFlaggedRecord(i).reasons.push(pageInfo.formatErrorMessage);
+      } else if (!pageInfo.isCover) {
+        // Style consistency check for normal pages
+        if (detectedPageStyle === 'p_prefix' && !/^p\d+/i.test(pageVal)) {
+          getOrCreateFlaggedRecord(i).reasons.push(`Page Number "${pageVal}" does not match the established "p000" style of the log.`);
+        } else if (detectedPageStyle === 'digits' && /^p\d+/i.test(pageVal)) {
+          getOrCreateFlaggedRecord(i).reasons.push(`Page Number "${pageVal}" is inconsistent with the numerical page format of the log.`);
+        }
       }
 
-      // Order check
-      const currentNumeric = parsePageNumeric(pageVal);
-      if (currentNumeric !== null && prevPageNumeric !== null) {
-        if (currentNumeric < prevPageNumeric) {
+      // Order check: CVR / CVR(n) must precede normal pages, and sequence must be non-decreasing
+      if (prevPageStr !== '') {
+        if (comparePageValues(prevPageStr, pageVal) > 0) {
           getOrCreateFlaggedRecord(i).reasons.push(`Page Number "${pageVal}" is out of order (follows page "${prevPageStr}").`);
         }
       }
-      if (currentNumeric !== null) {
-        prevPageNumeric = currentNumeric;
-        prevPageStr = pageVal;
-      }
+      prevPageStr = pageVal;
     }
 
     // Notes classification & relationship flags

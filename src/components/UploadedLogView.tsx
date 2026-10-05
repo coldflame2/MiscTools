@@ -7,6 +7,7 @@ import {
   getRuleById, 
   type ValidationRuleDef 
 } from '../services/validationRules';
+import { comparePageValues } from '../services/dataValidator';
 import { RowDetailModal } from './RowDetailModal';
 import { ErrorIcon } from './icons/ErrorIcon';
 import { CopyIcon } from './icons/CopyIcon';
@@ -602,6 +603,10 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
 
         if (valA === undefined || valA === null) return 1;
         if (valB === undefined || valB === null) return -1;
+
+        if (columnIndices?.pageColIndex !== undefined && colIdx === columnIndices.pageColIndex) {
+          return comparePageValues(valA, valB) * dir;
+        }
 
         const numA = Number(valA);
         const numB = Number(valB);

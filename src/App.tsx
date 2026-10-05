@@ -3,7 +3,7 @@ import React, { useState, useCallback, useMemo } from 'react';
 import { processExcelFile, processDataMatrix, parsePastedTextToMatrix } from './services/excelProcessor';
 import { analyzeAcknowledgements, describeImage } from './services/geminiService';
 import { processContactSheet } from './services/contactSheetProcessor';
-import { validateData } from './services/dataValidator';
+import { validateData, parsePageSequenceInfo, comparePageValues } from './services/dataValidator';
 import { VALIDATION_RULES, DEFAULT_ENABLED_RULE_IDS, filterFlagsByEnabledRules } from './services/validationRules';
 import { FileUpload } from './components/FileUpload';
 import { ResultsTable } from './components/ResultsTable';
@@ -50,28 +50,9 @@ const cleanAcknowledgement = (ack: string, source: string): string => {
 };
 
 const isCoverPage = (pageNumber: string): boolean => {
-  const normalizedPageNumber = pageNumber.trim().toLowerCase();
-
-  if (normalizedPageNumber === '') {
-    return true;
-  }
-
-  const exactMatchKeywords = ['c'];
-  if (exactMatchKeywords.includes(normalizedPageNumber)) {
-    return true;
-  }
-  
-  const partialMatchKeywords = [
-    'cov',
-    'cover',
-    'cvr',
-    'fc', // Front Cover
-    'bc', // Back Cover
-    'ifc', // Inside Front Cover
-    'ibc', // Inside Back Cover
-  ];
-
-  return partialMatchKeywords.some(keyword => normalizedPageNumber.includes(keyword));
+  const normalized = pageNumber.trim();
+  if (!normalized) return true;
+  return parsePageSequenceInfo(normalized).isCover;
 };
 
 
