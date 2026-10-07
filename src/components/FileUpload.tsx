@@ -18,17 +18,21 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, onPasteTex
   const handleFileChange = (files: FileList | null) => {
     if (files && files.length > 0) {
       const file = files[0];
+      const lowerName = file.name.toLowerCase();
       if (
         file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
         file.type === 'application/vnd.ms-excel' ||
-        file.name.endsWith('.xlsx') ||
-        file.name.endsWith('.xls') ||
-        file.name.endsWith('.csv') ||
-        file.name.endsWith('.tsv')
+        file.type === 'application/vnd.ms-excel.sheet.macroEnabled.12' ||
+        lowerName.endsWith('.xlsx') ||
+        lowerName.endsWith('.xlsm') ||
+        lowerName.endsWith('.xlsb') ||
+        lowerName.endsWith('.xls') ||
+        lowerName.endsWith('.csv') ||
+        lowerName.endsWith('.tsv')
       ) {
         onFileSelect(file);
       } else {
-        alert('Please upload a valid Excel or tabular log file (.xlsx, .xls, .csv, .tsv).');
+        alert('Please upload a valid Excel or tabular log file (.xlsx, .xlsm, .xlsb, .xls, .csv, .tsv).');
       }
     }
   };
@@ -88,7 +92,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, onPasteTex
           type="file"
           id="file-input"
           className="hidden"
-          accept=".xlsx, .xls, .csv, .tsv"
+          accept=".xlsx, .xlsm, .xlsb, .xls, .csv, .tsv"
           onChange={(e) => handleFileChange(e.target.files)}
         />
         <div className="flex flex-col items-center justify-center">
@@ -99,7 +103,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, onPasteTex
           <p className="text-sm text-slate-500 mt-1">
             or <span className="text-blue-600 font-semibold underline">click to browse</span>
           </p>
-          <p className="text-xs text-slate-400 mt-2">Supports .xlsx, .xls, .csv, and .tsv files</p>
+          <p className="text-xs text-slate-400 mt-2">Supports .xlsx, .xlsm, .xlsb, .xls, .csv, and .tsv files</p>
         </div>
       </div>
 

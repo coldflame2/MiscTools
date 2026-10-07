@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useMemo } from 'react';
-import { processExcelFile, processDataMatrix, parsePastedTextToMatrix } from './services/excelProcessor';
+import { processExcelFile, processDataMatrix, parsePastedTextToMatrix, ExcelProcessingError } from './services/excelProcessor';
 import { analyzeAcknowledgements, describeImage } from './services/geminiService';
 import { processContactSheet } from './services/contactSheetProcessor';
 import { validateData, parsePageSequenceInfo, comparePageValues } from './services/dataValidator';
@@ -23,7 +23,21 @@ import { UploadedLogView } from './components/UploadedLogView';
 import { CloudSyncModal } from './components/CloudSyncModal';
 import { BmsValidation } from './components/BmsValidation';
 import { CsExtractor } from './components/CsExtractor';
-import type { AcknowledgementRecord, AppStatus, AIFlaggedRecord, ContactSheetStatus, ImageAnalysisResult, ExtractedImage, AIAnalysisStatus, HeaderIndices, ActiveView } from './types';
+import { HeaderVerificationModal } from './components/HeaderVerificationModal';
+import { UploadDiagnosticCard } from './components/UploadDiagnosticCard';
+import type { 
+  AcknowledgementRecord, 
+  AppStatus, 
+  AIFlaggedRecord, 
+  ContactSheetStatus, 
+  ImageAnalysisResult, 
+  ExtractedImage, 
+  AIAnalysisStatus, 
+  HeaderIndices, 
+  ActiveView,
+  FileParseDiagnostic,
+  ProcessedExcelData
+} from './types';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from "docx";
 import saveAs from "file-saver";
 import { EditIcon } from './components/icons/EditIcon';
@@ -191,6 +205,11 @@ const App: React.FC = () => {
   // Side Drawer & Clear Confirmation State
   const [isNavExpanded, setIsNavExpanded] = useState<boolean>(false);
   const [showClearConfirm, setShowClearConfirm] = useState<boolean>(false);
+
+  // Header Verification & Diagnostic State
+  const [pendingUploadData, setPendingUploadData] = useState<ProcessedExcelData | null>(null);
+  const [isHeaderVerificationOpen, setIsHeaderVerificationOpen] = useState<boolean>(false);
+  const [parseDiagnostic, setParseDiagnostic] = useState<FileParseDiagnostic | null>(null);
 
   // Handler for live edits in raw matrix
   const handleRawDataChange = useCallback((updatedRawData: (string | number)[][]) => {
@@ -493,15 +512,56 @@ const App: React.FC = () => {
     setActiveView('credits');
     setHeaderRowIndex(-1);
     setColumnIndices(null);
+    setParseDiagnostic(null);
+    setPendingUploadData(null);
+    setIsHeaderVerificationOpen(false);
     try {
       localStorage.removeItem('assessment_log_helper_state_v1');
     } catch (e) {}
   };
 
+  const commitProcessedData = useCallback((data: ProcessedExcelData, targetName?: string) => {
+    if (targetName) setFileName(targetName);
+    setHeaderRowIndex(data.headerRowIndex);
+    setColumnIndices(data.columnIndices);
+
+    const validationFlags = validateData(data.rawData, data.headerRowIndex, data.columnIndices);
+    setRawValidationFlags(validationFlags);
+
+    setOriginalRecords(data.records);
+    setRawData(data.rawData);
+    setIsbn(data.isbn);
+    setTitle(data.title);
+    setOriginalRecordCount(data.records.length);
+
+    const coverRecords = data.records.filter(r => isCoverPage(r.pageNumber));
+    const nonCoverRecords = data.records.filter(r => !isCoverPage(r.pageNumber));
+
+    const { uniqueRecords: processedCoverData, duplicates: coverDups } = processGroup(coverRecords);
+    const { uniqueRecords: processedNonCoverData, duplicates: nonCoverDups } = processGroup(nonCoverRecords);
+
+    setCoverData(processedCoverData);
+    setNonCoverData(processedNonCoverData);
+    setRemovedDuplicates([...coverDups, ...nonCoverDups].sort((a,b) => a.source.localeCompare(b.source)));
+
+    const coverAckSet = new Set(processedCoverData.map(r => `${r.source}|${r.acknowledgement}`));
+    const crossDups = processedNonCoverData.filter(r => coverAckSet.has(`${r.source}|${r.acknowledgement}`));
+    setCrossCategoryDuplicates(crossDups);
+
+    setStatus('success');
+    setAiAnalysisStatus('skipped');
+    setPendingUploadData(null);
+    setIsHeaderVerificationOpen(false);
+    setParseDiagnostic(null);
+  }, []);
+
   const handleProcessFile = useCallback(async (file: File) => {
     setStatus('processing');
     setFileName(file.name);
     setError(null);
+    setParseDiagnostic(null);
+    setPendingUploadData(null);
+    setIsHeaderVerificationOpen(false);
     setRawValidationFlags([]);
     setAiFlags([]);
     setAiAnalysisStatus('idle');
@@ -513,55 +573,37 @@ const App: React.FC = () => {
     setActiveView('uploadedLog');
 
     try {
-      const { records: allRecords, isbn: fileIsbn, title: fileTitle, rawData: allRawData, headerRowIndex, columnIndices } = await processExcelFile(file);
+      const processed = await processExcelFile(file);
       
-      setHeaderRowIndex(headerRowIndex);
-      setColumnIndices(columnIndices);
-
-      const validationFlags = validateData(allRawData, headerRowIndex, columnIndices);
-      setRawValidationFlags(validationFlags);
-
-
-      setOriginalRecords(allRecords);
-      setRawData(allRawData);
-      setIsbn(fileIsbn);
-      setTitle(fileTitle);
-      setOriginalRecordCount(allRecords.length);
-
-      const coverRecords = allRecords.filter(r => isCoverPage(r.pageNumber));
-      const nonCoverRecords = allRecords.filter(r => !isCoverPage(r.pageNumber));
-
-      const { uniqueRecords: processedCoverData, duplicates: coverDups } = processGroup(coverRecords);
-      const { uniqueRecords: processedNonCoverData, duplicates: nonCoverDups } = processGroup(nonCoverRecords);
-
-      setCoverData(processedCoverData);
-      setNonCoverData(processedNonCoverData);
-      setRemovedDuplicates([...coverDups, ...nonCoverDups].sort((a,b) => a.source.localeCompare(b.source)));
-
-      const coverAckSet = new Set(processedCoverData.map(r => `${r.source}|${r.acknowledgement}`));
-      const crossDups = processedNonCoverData.filter(r => coverAckSet.has(`${r.source}|${r.acknowledgement}`));
-      setCrossCategoryDuplicates(crossDups);
-
-      // Show results to user immediately
-      setStatus('success');
-      
-      // Set AI analysis to skipped by default, user can trigger it manually.
-      setAiAnalysisStatus('skipped');
-
+      if (processed.headerMeta?.isFuzzyOrAmbiguous) {
+        setPendingUploadData(processed);
+        setIsHeaderVerificationOpen(true);
+        setStatus('idle');
+      } else {
+        commitProcessedData(processed, file.name);
+      }
     } catch (err) {
-      if (err instanceof Error) {
+      if (err instanceof ExcelProcessingError) {
         setError(err.message);
+        setParseDiagnostic(err.diagnostic || null);
+      } else if (err instanceof Error) {
+        setError(err.message);
+        setParseDiagnostic(null);
       } else {
         setError('An unexpected error occurred.');
+        setParseDiagnostic(null);
       }
       setStatus('error');
     }
-  }, []);
+  }, [commitProcessedData]);
 
   const handleProcessPastedText = useCallback((pastedText: string) => {
     setStatus('processing');
     setFileName('Pasted_Log.tsv');
     setError(null);
+    setParseDiagnostic(null);
+    setPendingUploadData(null);
+    setIsHeaderVerificationOpen(false);
     setRawValidationFlags([]);
     setAiFlags([]);
     setAiAnalysisStatus('idle');
@@ -574,45 +616,29 @@ const App: React.FC = () => {
 
     try {
       const rawMatrix = parsePastedTextToMatrix(pastedText);
-      const { records: allRecords, isbn: fileIsbn, title: fileTitle, rawData: allRawData, headerRowIndex, columnIndices } = processDataMatrix(rawMatrix);
+      const processed = processDataMatrix(rawMatrix);
 
-      setHeaderRowIndex(headerRowIndex);
-      setColumnIndices(columnIndices);
-
-      const validationFlags = validateData(allRawData, headerRowIndex, columnIndices);
-      setRawValidationFlags(validationFlags);
-
-      setOriginalRecords(allRecords);
-      setRawData(allRawData);
-      setIsbn(fileIsbn);
-      setTitle(fileTitle);
-      setOriginalRecordCount(allRecords.length);
-
-      const coverRecords = allRecords.filter(r => isCoverPage(r.pageNumber));
-      const nonCoverRecords = allRecords.filter(r => !isCoverPage(r.pageNumber));
-
-      const { uniqueRecords: processedCoverData, duplicates: coverDups } = processGroup(coverRecords);
-      const { uniqueRecords: processedNonCoverData, duplicates: nonCoverDups } = processGroup(nonCoverRecords);
-
-      setCoverData(processedCoverData);
-      setNonCoverData(processedNonCoverData);
-      setRemovedDuplicates([...coverDups, ...nonCoverDups].sort((a,b) => a.source.localeCompare(b.source)));
-
-      const coverAckSet = new Set(processedCoverData.map(r => `${r.source}|${r.acknowledgement}`));
-      const crossDups = processedNonCoverData.filter(r => coverAckSet.has(`${r.source}|${r.acknowledgement}`));
-      setCrossCategoryDuplicates(crossDups);
-
-      setStatus('success');
-      setAiAnalysisStatus('skipped');
+      if (processed.headerMeta?.isFuzzyOrAmbiguous) {
+        setPendingUploadData(processed);
+        setIsHeaderVerificationOpen(true);
+        setStatus('idle');
+      } else {
+        commitProcessedData(processed, 'Pasted_Log.tsv');
+      }
     } catch (err) {
-      if (err instanceof Error) {
+      if (err instanceof ExcelProcessingError) {
         setError(err.message);
+        setParseDiagnostic(err.diagnostic || null);
+      } else if (err instanceof Error) {
+        setError(err.message);
+        setParseDiagnostic(null);
       } else {
         setError('An unexpected error occurred while parsing pasted text.');
+        setParseDiagnostic(null);
       }
       setStatus('error');
     }
-  }, []);
+  }, [commitProcessedData]);
 
   const handleProcessOnlineUrl = useCallback(async (onlineUrl: string) => {
     setStatus('processing');
@@ -622,6 +648,9 @@ const App: React.FC = () => {
     setUnsavedChangesCount(0);
     setLastSyncedAt(new Date().toISOString());
     setError(null);
+    setParseDiagnostic(null);
+    setPendingUploadData(null);
+    setIsHeaderVerificationOpen(false);
     setRawValidationFlags([]);
     setAiFlags([]);
     setAiAnalysisStatus('idle');
@@ -649,7 +678,7 @@ const App: React.FC = () => {
             errorMsg = errJson.error;
           }
         } catch (e) {}
-        throw new Error(errorMsg);
+        throw new ExcelProcessingError(errorMsg);
       }
 
       const arrayBuffer = await response.arrayBuffer();
@@ -657,45 +686,29 @@ const App: React.FC = () => {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
       });
 
-      const { records: allRecords, isbn: fileIsbn, title: fileTitle, rawData: allRawData, headerRowIndex, columnIndices } = await processExcelFile(file);
+      const processed = await processExcelFile(file);
 
-      setHeaderRowIndex(headerRowIndex);
-      setColumnIndices(columnIndices);
-
-      const validationFlags = validateData(allRawData, headerRowIndex, columnIndices);
-      setRawValidationFlags(validationFlags);
-
-      setOriginalRecords(allRecords);
-      setRawData(allRawData);
-      setIsbn(fileIsbn);
-      setTitle(fileTitle);
-      setOriginalRecordCount(allRecords.length);
-
-      const coverRecords = allRecords.filter(r => isCoverPage(r.pageNumber));
-      const nonCoverRecords = allRecords.filter(r => !isCoverPage(r.pageNumber));
-
-      const { uniqueRecords: processedCoverData, duplicates: coverDups } = processGroup(coverRecords);
-      const { uniqueRecords: processedNonCoverData, duplicates: nonCoverDups } = processGroup(nonCoverRecords);
-
-      setCoverData(processedCoverData);
-      setNonCoverData(processedNonCoverData);
-      setRemovedDuplicates([...coverDups, ...nonCoverDups].sort((a,b) => a.source.localeCompare(b.source)));
-
-      const coverAckSet = new Set(processedCoverData.map(r => `${r.source}|${r.acknowledgement}`));
-      const crossDups = processedNonCoverData.filter(r => coverAckSet.has(`${r.source}|${r.acknowledgement}`));
-      setCrossCategoryDuplicates(crossDups);
-
-      setStatus('success');
-      setAiAnalysisStatus('skipped');
+      if (processed.headerMeta?.isFuzzyOrAmbiguous) {
+        setPendingUploadData(processed);
+        setIsHeaderVerificationOpen(true);
+        setStatus('idle');
+      } else {
+        commitProcessedData(processed, 'Online_Log.xlsx');
+      }
     } catch (err) {
-      if (err instanceof Error) {
+      if (err instanceof ExcelProcessingError) {
         setError(err.message);
+        setParseDiagnostic(err.diagnostic || null);
+      } else if (err instanceof Error) {
+        setError(err.message);
+        setParseDiagnostic(null);
       } else {
         setError('An unexpected error occurred while fetching online Excel file.');
+        setParseDiagnostic(null);
       }
       setStatus('error');
     }
-  }, []);
+  }, [commitProcessedData]);
 
   const handleRunAiAnalysis = async () => {
     setAiAnalysisStatus('running');
@@ -1517,18 +1530,12 @@ const App: React.FC = () => {
         );
       case 'error':
         return (
-          <div className="bg-white rounded-xl shadow-lg p-3 sm:p-4">
-            <div className="text-center p-4 bg-red-50 rounded-lg">
-              <ErrorIcon className="w-12 h-12 text-red-500 mx-auto mb-3" />
-              <h3 className="text-lg font-semibold text-red-700">Processing Failed</h3>
-              <p className="text-slate-600 mt-2 mb-4">{error}</p>
-              <button
-                onClick={handleReset}
-                className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700"
-              >
-                Try Again
-              </button>
-            </div>
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            <UploadDiagnosticCard
+              errorMessage={error || 'An unexpected error occurred during processing.'}
+              diagnostic={parseDiagnostic || undefined}
+              onReset={handleReset}
+            />
           </div>
         );
     }
@@ -1671,6 +1678,25 @@ const App: React.FC = () => {
                   </div>
                 </div>
               </div>
+            )}
+
+            {/* Header Verification Warning Modal */}
+            {pendingUploadData && pendingUploadData.headerMeta && (
+              <HeaderVerificationModal
+                isOpen={isHeaderVerificationOpen}
+                meta={pendingUploadData.headerMeta}
+                fileName={fileName || undefined}
+                onProceed={() => {
+                  if (pendingUploadData) {
+                    commitProcessedData(pendingUploadData, fileName || undefined);
+                  }
+                }}
+                onCancel={() => {
+                  setPendingUploadData(null);
+                  setIsHeaderVerificationOpen(false);
+                  handleReset();
+                }}
+              />
             )}
           </div>
         ) : (
