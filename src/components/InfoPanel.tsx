@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import type { AcknowledgementRecord, AIFlaggedRecord, ActiveView } from '../types';
 import { DetailsIcon } from './icons/DetailsIcon';
 import { ChevronRightIcon } from './icons/ChevronRightIcon';
@@ -22,7 +22,9 @@ import {
   Layers,
   CheckCheck,
   Ban,
-  ChevronDown
+  ChevronDown,
+  HelpCircle,
+  BookOpen
 } from 'lucide-react';
 
 interface InfoPanelProps {
@@ -65,6 +67,7 @@ export const InfoPanel: React.FC<InfoPanelProps> = ({
   const [ruleSearchQuery, setRuleSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [activeTab, setActiveTab] = useState<'rules' | 'details'>('rules');
+  const [selectedRuleForModal, setSelectedRuleForModal] = useState<ValidationRuleDef | null>(null);
 
   // Calculate live violation counts per rule
   const ruleViolationCounts = useMemo(() => {
@@ -104,22 +107,120 @@ export const InfoPanel: React.FC<InfoPanelProps> = ({
   const isAllEnabled = enabledCount === totalRules;
   const isNoneEnabled = enabledCount === 0;
 
+  // 1. Dynamic window width detection to adapt width smartly based on viewport screen size
+  const [windowWidth, setWindowWidth] = useState<number>(() => {
+    return typeof window !== 'undefined' ? window.innerWidth : 1280;
+  });
+
+  useEffect(() => {
+    const handleResize = () => {
+      setWindowWidth(window.innerWidth);
+    };
+    window.addEventListener('resize', handleResize, { passive: true });
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // 2. Calculate smart responsive width based on window screen size:
+  // - < 640px (Mobile): Compact, bounded by screen width (max 310px)
+  // - 640px - 1023px (Tablets / split windows): 280px - 320px (preserves maximum space for log spreadsheet)
+  // - 1024px - 1279px (Compact laptops): 325px - 355px
+  // - 1280px - 1535px (Standard 1080p laptop/desktop): 365px - 395px
+  // - 1536px - 1919px (Large desktop monitors): 405px - 440px
+  // - >= 1920px (Ultrawide / 4K): 440px - 480px
+  const smartWidth = useMemo(() => {
+    if (windowWidth < 640) {
+      return Math.min(windowWidth - 24, 310);
+    }
+    if (windowWidth < 1024) {
+      return Math.round(Math.min(Math.max(windowWidth * 0.30, 280), 320));
+    }
+    if (windowWidth < 1280) {
+      return Math.round(Math.min(Math.max(windowWidth * 0.27, 325), 355));
+    }
+    if (windowWidth < 1536) {
+      return Math.round(Math.min(Math.max(windowWidth * 0.25, 360), 395));
+    }
+    if (windowWidth < 1920) {
+      return Math.round(Math.min(Math.max(windowWidth * 0.23, 400), 440));
+    }
+    return Math.round(Math.min(Math.max(windowWidth * 0.22, 440), 480));
+  }, [windowWidth]);
+
+  // Optional manual drag override (null = auto-calculated smart width)
+  const [customWidth, setCustomWidth] = useState<number | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const isDraggingRef = useRef(false);
+  const dragStartXRef = useRef(0);
+  const dragStartWidthRef = useRef(0);
+
+  // Active panel width clamped within safe boundaries for current screen
+  const activeWidth = useMemo(() => {
+    const minW = Math.min(270, windowWidth - 24);
+    const maxW = Math.max(320, Math.min(620, Math.round(windowWidth * 0.46)));
+    if (customWidth !== null) {
+      return Math.min(Math.max(customWidth, minW), maxW);
+    }
+    return Math.min(Math.max(smartWidth, minW), maxW);
+  }, [customWidth, smartWidth, windowWidth]);
+
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    isDraggingRef.current = true;
+    setIsDragging(true);
+    dragStartXRef.current = e.clientX;
+    dragStartWidthRef.current = activeWidth;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  }, [activeWidth]);
+
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    if (!isDraggingRef.current) return;
+    const deltaX = dragStartXRef.current - e.clientX;
+    const newWidth = dragStartWidthRef.current + deltaX;
+    const minW = Math.min(270, windowWidth - 24);
+    const maxW = Math.max(320, Math.min(620, Math.round(windowWidth * 0.46)));
+    setCustomWidth(Math.min(Math.max(newWidth, minW), maxW));
+  }, [windowWidth]);
+
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    if (isDraggingRef.current) {
+      isDraggingRef.current = false;
+      setIsDragging(false);
+      try {
+        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch (err) {}
+    }
+  }, []);
+
+  const handleResetToAutoWidth = useCallback(() => {
+    setCustomWidth(null);
+  }, []);
+
   if (!isOpen) {
     return (
       <aside className="relative flex-shrink-0 w-11 transition-all duration-300">
         <div className="h-full bg-white rounded-xl shadow-md border border-slate-200 flex flex-col items-center py-4 select-none">
           <button 
             onClick={onToggle} 
-            className="w-8 h-8 flex items-center justify-center rounded-lg bg-slate-100 hover:bg-blue-50 text-slate-600 hover:text-blue-600 transition-colors shadow-2xs"
+            className="w-8 h-8 flex items-center justify-center rounded-lg bg-slate-100 hover:bg-blue-50 text-slate-600 hover:text-blue-600 transition-colors shadow-2xs cursor-pointer"
             aria-label="Expand Rules & Details panel"
             title="Expand Rules & Details panel"
           >
             <ChevronRightIcon className="w-4 h-4 rotate-180 transform" />
           </button>
           
+          {/* Active filter badge in collapsed state */}
+          {enabledCount < totalRules && (
+            <div 
+              className="mt-3 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-100 text-amber-800 border border-amber-300 shadow-2xs"
+              title={`${totalRules - enabledCount} rule(s) disabled / filtered (${enabledCount} active)`}
+            >
+              {enabledCount}
+            </div>
+          )}
+
           <button 
             onClick={onToggle}
-            className="mt-6 flex flex-col items-center gap-2 text-slate-500 hover:text-blue-600 transition-colors group"
+            className="mt-5 flex flex-col items-center gap-2 text-slate-500 hover:text-blue-600 transition-colors group cursor-pointer"
             title="Click to expand Rules & Details panel"
           >
             <SlidersHorizontal className="w-4 h-4 text-slate-400 group-hover:text-blue-600 transition-colors" />
@@ -136,24 +237,60 @@ export const InfoPanel: React.FC<InfoPanelProps> = ({
   }
   
   return (
-    <aside className="relative transition-all duration-300 flex-shrink-0 w-88 lg:w-96 flex flex-col h-full overflow-hidden">
+    <aside 
+      style={{ width: `${activeWidth}px` }}
+      className={`relative transition-[width] duration-150 flex-shrink-0 flex flex-col h-full max-w-[calc(100vw-1.5rem)] select-text ${
+        isDragging ? 'select-none' : ''
+      }`}
+    >
+      {/* Draggable left edge resize handle */}
+      <div
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        onDoubleClick={handleResetToAutoWidth}
+        title="Drag left/right to resize width · Double-click to reset to smart window width"
+        className={`absolute -left-1.5 top-0 bottom-0 w-3 cursor-col-resize z-20 flex items-center justify-center group ${
+          isDragging ? 'bg-blue-400/30' : 'hover:bg-blue-300/20'
+        }`}
+      >
+        <div className={`w-1 h-8 rounded-full transition-colors ${
+          isDragging ? 'bg-blue-600 shadow-sm' : 'bg-slate-300 group-hover:bg-blue-500'
+        }`} />
+      </div>
+
       <div className="h-full bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden flex flex-col">
         
         {/* Main Panel Header */}
         <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-slate-200 bg-slate-50 shrink-0">
-          <div className="flex items-center gap-2">
-            <div className="p-1.5 bg-blue-100 text-blue-700 rounded-lg border border-blue-200 shadow-2xs">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="p-1.5 bg-blue-100 text-blue-700 rounded-lg border border-blue-200 shadow-2xs shrink-0">
               <SlidersHorizontal className="w-4 h-4" />
             </div>
-            <div>
-              <h2 className="text-sm font-bold text-slate-900 leading-tight">
-                Rules & Details
-              </h2>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <h2 className="text-sm font-bold text-slate-900 leading-tight truncate">
+                  Rules & Details
+                </h2>
+                {/* Smart width indicator */}
+                <span 
+                  onClick={customWidth !== null ? handleResetToAutoWidth : undefined}
+                  className={`text-[9px] font-mono px-1.5 py-0.5 rounded transition-colors hidden sm:inline-block ${
+                    customWidth !== null 
+                      ? 'bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 cursor-pointer' 
+                      : 'bg-slate-200/80 text-slate-600'
+                  }`}
+                  title={customWidth !== null ? 'Custom width. Click to reset to smart auto width' : `Smart width (${activeWidth}px) adapted for ${windowWidth}px screen`}
+                >
+                  {activeWidth}px{customWidth !== null ? ' · Reset' : ' · Auto'}
+                </span>
+              </div>
               <p className="text-[11px] text-slate-500 flex items-center gap-1.5 mt-0.5">
                 <span className={`inline-block w-2 h-2 rounded-full ${enabledCount === totalRules ? 'bg-emerald-500' : enabledCount === 0 ? 'bg-red-500' : 'bg-amber-500'}`} />
-                <span>{enabledCount} of {totalRules} rules active</span>
+                <span className="truncate">{enabledCount} of {totalRules} rules active</span>
                 {enabledCount < totalRules && (
-                  <span className="text-[10px] text-amber-700 font-semibold bg-amber-100 px-1.5 py-0.2 rounded">
+                  <span className="text-[10px] text-amber-700 font-semibold bg-amber-100 px-1.5 py-0.2 rounded shrink-0">
                     Filter Active
                   </span>
                 )}
@@ -161,12 +298,12 @@ export const InfoPanel: React.FC<InfoPanelProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 shrink-0 ml-1">
             <button 
               onClick={onToggle} 
-              className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 transition-colors shadow-2xs"
+              className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 transition-colors shadow-2xs cursor-pointer"
               aria-label="Collapse panel"
-              title="Collapse panel"
+              title="Collapse Rules & Details panel"
             >
               <ChevronRightIcon className="w-4 h-4" />
             </button>
@@ -213,49 +350,34 @@ export const InfoPanel: React.FC<InfoPanelProps> = ({
           {/* ========================================================================= */}
           {activeTab === 'rules' && (
             <div className="space-y-3">
-              {/* Rules Description & Preset Actions */}
-              <div className="bg-gradient-to-r from-blue-50/80 to-indigo-50/50 border border-blue-200/90 rounded-xl p-3 space-y-2 shadow-2xs">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
-                    <div>
-                      <h3 className="text-xs font-bold text-blue-950">Active Rules Enforcement</h3>
-                      <p className="text-[11px] text-blue-800/90 leading-tight">
-                        Toggle rules off to temporarily suppress specific errors and warnings in the report.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Quick Presets Bar */}
-                <div className="flex items-center gap-1.5 pt-1.5 border-t border-blue-200/60 flex-wrap">
-                  <button
-                    onClick={onEnableAllRules}
-                    disabled={isAllEnabled}
-                    className="px-2 py-1 text-[11px] font-semibold bg-white text-emerald-700 border border-emerald-300/80 rounded-md hover:bg-emerald-50 disabled:opacity-40 transition-colors shadow-2xs flex items-center gap-1"
-                    title="Enable all validation checks"
-                  >
-                    <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Enable All ({totalRules})</span>
-                  </button>
-                  <button
-                    onClick={onDisableAllRules}
-                    disabled={isNoneEnabled}
-                    className="px-2 py-1 text-[11px] font-semibold bg-white text-red-700 border border-red-300/80 rounded-md hover:bg-red-50 disabled:opacity-40 transition-colors shadow-2xs flex items-center gap-1"
-                    title="Disable all validation checks"
-                  >
-                    <Ban className="w-3.5 h-3.5 text-red-500" />
-                    <span>Disable All</span>
-                  </button>
-                  <button
-                    onClick={onResetRules}
-                    className="px-2 py-1 text-[11px] font-semibold bg-white text-slate-700 border border-slate-300 rounded-md hover:bg-slate-100 transition-colors shadow-2xs ml-auto flex items-center gap-1"
-                    title="Reset to default active rules"
-                  >
-                    <RotateCcw className="w-3 h-3 text-slate-500" />
-                    <span>Reset</span>
-                  </button>
-                </div>
+              {/* Preset Actions: Enable All, Disable All, Reset in One Line */}
+              <div className="flex items-center gap-1.5 p-1 bg-gradient-to-r from-blue-50/70 to-indigo-50/50 border border-blue-200/80 rounded-xl shadow-2xs">
+                <button
+                  onClick={onEnableAllRules}
+                  disabled={isAllEnabled}
+                  className="flex-1 py-1.5 px-2 text-[11px] font-semibold bg-white text-emerald-700 border border-emerald-300/80 rounded-lg hover:bg-emerald-50 disabled:opacity-40 transition-colors shadow-2xs flex items-center justify-center gap-1 whitespace-nowrap min-w-0"
+                  title={`Enable all validation checks (${totalRules})`}
+                >
+                  <CheckCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span className="truncate">Enable All</span>
+                </button>
+                <button
+                  onClick={onDisableAllRules}
+                  disabled={isNoneEnabled}
+                  className="flex-1 py-1.5 px-2 text-[11px] font-semibold bg-white text-red-700 border border-red-300/80 rounded-lg hover:bg-red-50 disabled:opacity-40 transition-colors shadow-2xs flex items-center justify-center gap-1 whitespace-nowrap min-w-0"
+                  title="Disable all validation checks"
+                >
+                  <Ban className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                  <span className="truncate">Disable All</span>
+                </button>
+                <button
+                  onClick={onResetRules}
+                  className="flex-1 py-1.5 px-2 text-[11px] font-semibold bg-white text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-100 transition-colors shadow-2xs flex items-center justify-center gap-1 whitespace-nowrap min-w-0"
+                  title="Reset rules to default active state"
+                >
+                  <RotateCcw className="w-3 h-3 text-slate-500 shrink-0" />
+                  <span className="truncate">Reset</span>
+                </button>
               </div>
 
               {/* Search & Category Filter */}
@@ -319,10 +441,10 @@ export const InfoPanel: React.FC<InfoPanelProps> = ({
                             : 'bg-slate-50/80 border-slate-200/60 opacity-60 hover:opacity-85'
                         }`}
                       >
-                        <div className="flex items-start justify-between gap-2.5">
-                          <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2.5">
+                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
                             {/* Switch Toggle */}
-                            <div className="mt-0.5 shrink-0">
+                            <div className="shrink-0">
                               <div className={`w-7 h-4 flex items-center rounded-full p-0.5 duration-200 cursor-pointer ${
                                 isEnabled ? 'bg-blue-600 justify-end' : 'bg-slate-300 justify-start'
                               }`}>
@@ -344,14 +466,26 @@ export const InfoPanel: React.FC<InfoPanelProps> = ({
                                   {rule.severity}
                                 </span>
                               </div>
-                              <p className="text-[11px] text-slate-500 mt-1 leading-snug">
-                                {rule.shortDesc}
-                              </p>
                             </div>
                           </div>
 
-                          {/* Live Issue Count Badge */}
-                          <div className="shrink-0 flex items-center">
+                          {/* Right Controls: Read More Info Button & Live Issue Count Badge */}
+                          <div className="shrink-0 flex items-center gap-1.5">
+                            {/* Read More button on the right */}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedRuleForModal(rule);
+                              }}
+                              className="p-1 rounded-md text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors cursor-pointer"
+                              title={`Read detailed explanation for ${rule.name}`}
+                              aria-label={`Read detailed explanation for ${rule.name}`}
+                            >
+                              <HelpCircle className="w-3.5 h-3.5" />
+                            </button>
+
+                            {/* Live Issue Count Badge */}
                             {issueCount > 0 ? (
                               <span 
                                 title={`${issueCount} issue(s) detected in uploaded data by this rule`}
@@ -531,6 +665,107 @@ export const InfoPanel: React.FC<InfoPanelProps> = ({
           <span className="font-mono text-slate-400">Rules Engine v2</span>
         </div>
       </div>
+
+      {/* ========================================================================= */}
+      {/* RULE EXPLANATION OVERLAY MODAL / BOX                                      */}
+      {/* ========================================================================= */}
+      {selectedRuleForModal && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-150"
+          onClick={() => setSelectedRuleForModal(null)}
+        >
+          <div 
+            className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-lg w-full p-5 space-y-4 overflow-hidden relative animate-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className={`p-2 rounded-xl ${
+                  selectedRuleForModal.severity === 'error' ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600'
+                }`}>
+                  <BookOpen className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-slate-900 leading-tight">
+                    {selectedRuleForModal.name}
+                  </h3>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-[11px] text-slate-500 bg-slate-100 px-2 py-0.5 rounded font-medium">
+                      {selectedRuleForModal.category}
+                    </span>
+                    <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${
+                      selectedRuleForModal.severity === 'error' ? 'text-red-700 bg-red-100' : 'text-amber-700 bg-amber-100'
+                    }`}>
+                      {selectedRuleForModal.severity}
+                    </span>
+                    <span className="text-[11px] font-mono text-slate-400">
+                      ID: {selectedRuleForModal.id}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setSelectedRuleForModal(null)}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                aria-label="Close rule explanation"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Body / Explanation */}
+            <div className="space-y-3 text-xs leading-relaxed text-slate-700">
+              <div>
+                <h4 className="font-bold text-slate-900 text-xs mb-1">Summary</h4>
+                <p className="bg-slate-50 p-2.5 rounded-lg border border-slate-200/80 text-slate-600">
+                  {selectedRuleForModal.shortDesc}
+                </p>
+              </div>
+
+              <div>
+                <h4 className="font-bold text-slate-900 text-xs mb-1">Detailed Explanation & Publishing Specification</h4>
+                <p className="text-slate-700 text-xs leading-relaxed">
+                  {selectedRuleForModal.fullDescription || selectedRuleForModal.shortDesc}
+                </p>
+              </div>
+
+              {/* Status & Quick Toggle Inside Modal */}
+              <div className="bg-blue-50/60 border border-blue-200/80 rounded-xl p-3 flex items-center justify-between gap-3 mt-2">
+                <div className="text-xs">
+                  <span className="font-bold text-blue-950 block">Current Status:</span>
+                  <span className={enabledRuleIds.has(selectedRuleForModal.id) ? 'text-emerald-700 font-semibold' : 'text-slate-500 font-semibold'}>
+                    {enabledRuleIds.has(selectedRuleForModal.id) ? 'Active (Checking & Flagging)' : 'Disabled (Suppressed in validation)'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onToggleRule && onToggleRule(selectedRuleForModal.id)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold shadow-2xs transition-colors cursor-pointer flex items-center gap-1.5 ${
+                    enabledRuleIds.has(selectedRuleForModal.id)
+                      ? 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'
+                      : 'bg-blue-600 text-white hover:bg-blue-700'
+                  }`}
+                >
+                  {enabledRuleIds.has(selectedRuleForModal.id) ? 'Disable Rule' : 'Enable Rule'}
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="border-t border-slate-100 pt-3 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedRuleForModal(null)}
+                className="px-4 py-1.5 text-xs font-semibold bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors shadow-2xs cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </aside>
   );
 };

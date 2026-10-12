@@ -149,10 +149,106 @@ export const parseTwoPartNote = (noteText: string): TwoPartNoteData | null => {
   };
 };
 
+export interface PickupTitleNoteData {
+  isPickupTitleNote: boolean;
+  parentTitle?: string;
+  parentPage?: string;
+  isReplacedInParent: boolean;
+  expectedUsageClassification: 'New/No License' | 'Pickup/No License';
+  explanation: string;
+}
+
+/**
+ * Parses notes starting with "Pick-up from {title}" or "Pickup from {title}".
+ *
+ * Rules:
+ * 1. "Pickup" in the note means the image is inherited/used from another parent title.
+ * 2. If the image was NOT replaced in the parent title (e.g. "I hope no action required here",
+ *    or "The image was licensed in {title}. I hope no further action required here", or "RF in repro"),
+ *    then Usage Classification is always "Pickup/No License".
+ * 3. If the image WAS replaced in the parent title (e.g. "The image was replaced and licensed in {title}.
+ *    So, it needs to be replaced here as well"), then Usage Classification is always "New/No License".
+ * 4. In all cases, it is no-license, so License Fee must be blank or 0.
+ */
+export const parsePickupTitleNote = (noteText: string): PickupTitleNoteData | null => {
+  if (!noteText) return null;
+  const clean = noteText.replace(/\r\n/g, '\n').trim();
+  if (!clean) return null;
+
+  // Must begin with pick-up from or pickup from or pick up from
+  const prefixMatch = clean.match(/^\s*["']?\s*(?:note:\s*)?pick[- ]?up\s+from[:\s]\s*(.+)/is);
+  if (!prefixMatch) {
+    return null;
+  }
+
+  const bodyAfterPrefix = prefixMatch[1].trim();
+
+  // Try extracting parentTitle and parentPage
+  let parentTitle = '';
+  let parentPage = '';
+  let remarks = bodyAfterPrefix;
+
+  const pageMatch = bodyAfterPrefix.match(/^([^,\n\r]+?)(?:,\s*|\s+)(?:page|pg|p\.)\s*([a-z0-9()_\-–]+)(?:[.,;:\n\r]|$)(.*)/is);
+  if (pageMatch) {
+    parentTitle = pageMatch[1].trim();
+    parentPage = pageMatch[2].trim();
+    remarks = pageMatch[3] ? pageMatch[3].trim() : '';
+  } else {
+    // If no explicit page keyword, capture title up to first period, semicolon or newline
+    const firstSentenceMatch = bodyAfterPrefix.match(/^([^.\n\r;]+)(?:[.\n\r;]|$)(.*)/is);
+    if (firstSentenceMatch) {
+      parentTitle = firstSentenceMatch[1].trim();
+      remarks = firstSentenceMatch[2] ? firstSentenceMatch[2].trim() : '';
+    } else {
+      parentTitle = bodyAfterPrefix;
+      remarks = '';
+    }
+  }
+
+  const lowerAll = clean.toLowerCase();
+
+  // Negative check: explicitly stated NOT replaced or no replacement
+  const isExplicitlyNotReplaced =
+    lowerAll.includes('not replaced') ||
+    lowerAll.includes('no replacement') ||
+    lowerAll.includes('without replacement') ||
+    lowerAll.includes('never replaced');
+
+  // Positive replacement indicators
+  // e.g. "The image was replaced and licensed in ... So, it needs to be replaced here as well."
+  // or "replaced and licensed" or "needs to be replaced"
+  const hasReplacementIndicators =
+    (lowerAll.includes('replaced') ||
+     lowerAll.includes('replacement') ||
+     lowerAll.includes('needs to be replace') ||
+     lowerAll.includes('need to be replace') ||
+     lowerAll.includes('to be replaced')) &&
+    !isExplicitlyNotReplaced;
+
+  const isReplacedInParent = hasReplacementIndicators;
+  const expectedUsageClassification: 'New/No License' | 'Pickup/No License' = isReplacedInParent
+    ? 'New/No License'
+    : 'Pickup/No License';
+
+  const explanation = isReplacedInParent
+    ? `Image was replaced in parent title (${parentTitle || 'parent title'}), so usage is New and No License.`
+    : `Image is inherited from parent title (${parentTitle || 'parent title'}) with no replacement, so usage is Pickup and No License.`;
+
+  return {
+    isPickupTitleNote: true,
+    parentTitle,
+    parentPage,
+    isReplacedInParent,
+    expectedUsageClassification,
+    explanation,
+  };
+};
+
 export interface PageSequenceInfo {
   raw: string;
   isCover: boolean;
-  coverIndex: number; // e.g. 1 for CVR or CVR(1), 2 for CVR(2), etc.
+  coverType?: 'front' | 'back' | 'inside_front' | 'inside_back' | 'generic';
+  coverIndex: number; // e.g. 1 for CVR(1), 2 for CVR(2), etc.
   isNormalPage: boolean;
   normalPageNumber: number; // e.g. 1, 2, 3...
   isValidFormat: boolean;
@@ -173,33 +269,51 @@ export const parsePageSequenceInfo = (pageStr: string): PageSequenceInfo => {
     };
   }
 
-  const lower = clean.toLowerCase();
-
-  // 1. Check for invalid CVR(0) or negative/non-positive indices
-  const cvrZeroOrInvalid = clean.match(/^cvr\s*\(\s*([-\d]+)\s*\)$/i);
-  if (cvrZeroOrInvalid) {
-    const num = parseInt(cvrZeroOrInvalid[1], 10);
-    if (isNaN(num) || num < 1) {
+  // 1. Check for invalid cover with (0) or negative/non-positive index (e.g., CVR(0), Front Cover(-1), Back Cover(0))
+  const invalidCoverIndexMatch = clean.match(
+    /^(?:(?:front\s+|frnt\s+|f[\s-]?)?(?:cvr|cover)|(?:back\s+|bck\s+|b[\s-]?)?(?:cvr|cover)|ifc|ibc)\s*(?:\(\s*([-\d]+)\s*\)|([-\d]+))$/i
+  );
+  if (invalidCoverIndexMatch) {
+    const rawIdxStr = invalidCoverIndexMatch[1] ?? invalidCoverIndexMatch[2];
+    const num = parseInt(rawIdxStr, 10);
+    if (!isNaN(num) && num < 1) {
       return {
         raw: clean,
         isCover: true,
+        coverType: 'generic',
         coverIndex: 0,
         isNormalPage: false,
         normalPageNumber: 0,
         isValidFormat: false,
-        formatErrorMessage: `Page Number "${clean}" is invalid. CVR(n) page index must be a positive integer starting with 1 (e.g. CVR(1), CVR(2)).`
+        formatErrorMessage: `Page Number "${clean}" is invalid. Cover (n) index must be a positive integer starting with 1 (e.g. CVR(1), CVR(2)).`
       };
     }
   }
 
-  // 2. Check for valid CVR or CVR(n) or CVR n (case-insensitive, n >= 1)
-  const cvrMatch = clean.match(/^cvr(?:\s*\(\s*([1-9]\d*)\s*\)|\s*([1-9]\d*))?$/i);
-  if (cvrMatch) {
-    const n = cvrMatch[1] || cvrMatch[2];
+  // Helper parser for (n) or trailing number
+  const extractIndex = (suffix?: string): number => {
+    if (!suffix) return 1;
+    const match = suffix.match(/\(?\s*([1-9]\d*)\s*\)?/);
+    return match ? parseInt(match[1], 10) : 1;
+  };
+
+  // 2. BACK COVER VARIANTS
+  // Variants supported:
+  // - "Back Cover", "Back CVR", "Back-CVR", "Back Cover(n)", "Back CVR(n)"
+  // - "Bck Cover", "Bck CVR", "Bck-CVR", "Bck CVR(n)"
+  // - "B Cover", "B-Cover", "B CVR", "B-CVR", "B CVR(n)"
+  // - "BCVR", "BCVR(n)"
+  // - "BC", "BC(n)"
+  // - "Rear Cover", "Rear CVR", "Rear CVR(n)"
+  const backCoverRegex = /^(?:back|bck|rear|b)\s*[-_]?\s*(?:cvr|cover)(?:\s*(?:\(\s*([1-9]\d*)\s*\)|([1-9]\d*)))?$|^bcvr(?:\s*(?:\(\s*([1-9]\d*)\s*\)|([1-9]\d*)))?$|^bc(?:\s*(?:\(\s*([1-9]\d*)\s*\)|([1-9]\d*)))?$/i;
+  const backMatch = clean.match(backCoverRegex);
+  if (backMatch) {
+    const n = backMatch[1] || backMatch[2] || backMatch[3] || backMatch[4] || backMatch[5] || backMatch[6];
     const coverIndex = n ? parseInt(n, 10) : 1;
     return {
       raw: clean,
       isCover: true,
+      coverType: 'back',
       coverIndex,
       isNormalPage: false,
       normalPageNumber: 0,
@@ -207,42 +321,60 @@ export const parsePageSequenceInfo = (pageStr: string): PageSequenceInfo => {
     };
   }
 
-  // 3. Check for other standard cover formats (cover, cov, c, fc, ifc, ibc, bc)
-  if (lower === 'c' || lower === 'cover' || lower === 'cov' || lower === 'front cover' || lower === 'fc') {
+  // Inside back cover (IBC)
+  const insideBackRegex = /^(?:inside\s+back\s+cover|ibc|in[\s-]?back[\s-]?cvr)(?:\s*(?:\(\s*([1-9]\d*)\s*\)|([1-9]\d*)))?$/i;
+  const insideBackMatch = clean.match(insideBackRegex);
+  if (insideBackMatch) {
+    const n = insideBackMatch[1] || insideBackMatch[2];
+    const coverIndex = n ? parseInt(n, 10) : 1;
     return {
       raw: clean,
       isCover: true,
-      coverIndex: 1,
+      coverType: 'inside_back',
+      coverIndex,
       isNormalPage: false,
       normalPageNumber: 0,
       isValidFormat: true
     };
   }
-  if (lower === 'ifc' || lower === 'inside front cover') {
+
+  // Inside front cover (IFC)
+  const insideFrontRegex = /^(?:inside\s+front\s+cover|ifc|in[\s-]?front[\s-]?cvr)(?:\s*(?:\(\s*([1-9]\d*)\s*\)|([1-9]\d*)))?$/i;
+  const insideFrontMatch = clean.match(insideFrontRegex);
+  if (insideFrontMatch) {
+    const n = insideFrontMatch[1] || insideFrontMatch[2];
+    const coverIndex = n ? parseInt(n, 10) : 1;
     return {
       raw: clean,
       isCover: true,
-      coverIndex: 2,
+      coverType: 'inside_front',
+      coverIndex,
       isNormalPage: false,
       normalPageNumber: 0,
       isValidFormat: true
     };
   }
-  if (lower === 'ibc' || lower === 'inside back cover') {
+
+  // 3. FRONT COVER / GENERAL COVER VARIANTS
+  // Variants supported:
+  // - "CVR", "CVR(n)", "CVR n"
+  // - "Cover", "Cover(n)", "Cover n", "Cov", "Cov(n)"
+  // - "Front Cover", "Front Cover(n)", "Front Cover n"
+  // - "Front CVR", "Front CVR(n)", "Front-CVR", "Front-CVR(n)"
+  // - "Frnt CVR", "Frnt Cover", "Frnt-CVR", "Frnt-Cover", "Frnt CVR(n)"
+  // - "F CVR", "F-CVR", "F-Cover", "F Cover", "F CVR(n)", "F-CVR(n)"
+  // - "FCVR", "FCVR(n)"
+  // - "FC", "FC(n)", "C", "C(n)"
+  const frontCoverRegex = /^(?:(?:front|frnt|f)\s*[-_]?\s*(?:cvr|cover)|fcvr|cvr|cover|cov|fc|c)(?:\s*(?:\(\s*([1-9]\d*)\s*\)|([1-9]\d*)))?$/i;
+  const frontMatch = clean.match(frontCoverRegex);
+  if (frontMatch) {
+    const n = frontMatch[1] || frontMatch[2];
+    const coverIndex = n ? parseInt(n, 10) : 1;
     return {
       raw: clean,
       isCover: true,
-      coverIndex: 3,
-      isNormalPage: false,
-      normalPageNumber: 0,
-      isValidFormat: true
-    };
-  }
-  if (lower === 'bc' || lower === 'back cover') {
-    return {
-      raw: clean,
-      isCover: true,
-      coverIndex: 4,
+      coverType: 'front',
+      coverIndex,
       isNormalPage: false,
       normalPageNumber: 0,
       isValidFormat: true
@@ -319,15 +451,35 @@ export const comparePageValues = (a: any, b: any): number => {
   const infoA = parsePageSequenceInfo(strA);
   const infoB = parsePageSequenceInfo(strB);
 
-  // If both are covers, sort by cover index (e.g. CVR(1) < CVR(2) < CVR(3))
+  // If both are covers, sort appropriately:
+  // Order: Front cover < Inside Front < Inside Back < Back cover
+  // Within same type, sort by coverIndex (e.g. CVR(1) < CVR(2) < CVR(3))
   if (infoA.isCover && infoB.isCover) {
+    const typeRank: Record<string, number> = {
+      front: 1,
+      inside_front: 2,
+      inside_back: 3,
+      back: 4,
+      generic: 1,
+    };
+    const rankA = typeRank[infoA.coverType || 'generic'] || 1;
+    const rankB = typeRank[infoB.coverType || 'generic'] || 1;
+    if (rankA !== rankB) {
+      return rankA - rankB;
+    }
     return infoA.coverIndex - infoB.coverIndex;
   }
-  // Cover entries always come before normal pages
+  // Cover entries at the beginning of the book come before normal pages
+  // Note: Back cover can also appear at the end or at the top
   if (infoA.isCover && !infoB.isCover) {
+    // If infoA is a back cover following normal pages, it's valid at the end
     return -1;
   }
   if (!infoA.isCover && infoB.isCover) {
+    // If infoB is a back cover appearing after normal pages, it's valid at the end (not out of order)
+    if (infoB.coverType === 'back' || infoB.coverType === 'inside_back') {
+      return -1; // normal page precedes back cover: valid sequence!
+    }
     return 1;
   }
 
@@ -421,6 +573,8 @@ export const validateData = (
   const detectedPageStyle = pPrefixCount >= digitsLetterCount && pPrefixCount > 0 ? 'p_prefix' : 'digits';
 
   let prevPageStr = '';
+  let lastFrontCoverIndex = 0;
+  let lastBackCoverIndex = 0;
 
   // --- ROW-BY-ROW VALIDATION ---
   for (let i = headerRowIndex + 1; i <= lastDataRowIndex; i++) {
@@ -447,6 +601,24 @@ export const validateData = (
       getOrCreateFlaggedRecord(i).reasons.push(`Invalid Usage Classification "${usageVal}". Must be New, New/License, New/No License, Pickup/License, or Pickup/No License.`);
     }
 
+    // Notes classification & relationship preliminary detection for row context
+    const notesVal = columnIndices.notesColIndex !== undefined ? String(row[columnIndices.notesColIndex] ?? '').trim() : '';
+    const jcCommentsVal = columnIndices.jcCommentsColIndex !== undefined ? String(row[columnIndices.jcCommentsColIndex] ?? '').trim() : '';
+    const aptaraCommentsVal = columnIndices.aptaraCommentsColIndex !== undefined ? String(row[columnIndices.aptaraCommentsColIndex] ?? '').trim() : '';
+    const fullNoteCandidate = notesVal || jcCommentsVal || aptaraCommentsVal;
+    const pickupTitleNote = parsePickupTitleNote(fullNoteCandidate);
+
+    // Rule: For images marked as "New" and not sourced from parent titles,
+    // all four columns - Library Image No, Source, Rights Type, Acknowledgement - can be N/A or NA.
+    const isNewClassification = /^new(?:\/.*)?$/i.test(usageVal);
+    const isSourcedFromParentTitle = !!(pickupTitleNote && pickupTitleNote.isPickupTitleNote);
+    const isNewNotFromParent = isNewClassification && !isSourcedFromParentTitle;
+
+    const isNAValue = (val: string): boolean => {
+      const cleanVal = val.trim().toLowerCase();
+      return cleanVal === 'n/a' || cleanVal === 'na';
+    };
+
     // 3. Description
     const descVal = String(row[columnIndices.descColIndex] ?? '').trim();
     if (!descVal) {
@@ -463,6 +635,8 @@ export const validateData = (
     const sourceVal = String(row[columnIndices.sourceColIndex] ?? '').trim();
     if (!sourceVal) {
       getOrCreateFlaggedRecord(i).reasons.push('Source is required.');
+    } else if (isNewNotFromParent && isNAValue(sourceVal)) {
+      // Valid: For images marked as "New" and not sourced from parent titles, Source can be N/A or NA
     } else {
       const lowerSource = sourceVal.toLowerCase();
       if (lowerSource.includes('shutterstock')) {
@@ -486,10 +660,12 @@ export const validateData = (
 
     // 6. Rights Type
     const rightsVal = String(row[columnIndices.rightsColIndex] ?? '').trim();
-    const validRights = ['RF', 'RM', 'RFe', 'N/A', 'N/a', 'n/a'];
+    const validRights = ['RF', 'RM', 'RFe', 'N/A', 'N/a', 'n/a', 'NA', 'na'];
     if (!rightsVal) {
       getOrCreateFlaggedRecord(i).reasons.push('Rights Type is required.');
-    } else if (!validRights.includes(rightsVal) && rightsVal.toLowerCase() !== 'n/a') {
+    } else if (isNewNotFromParent && isNAValue(rightsVal)) {
+      // Valid: For images marked as "New" and not sourced from parent titles, Rights Type can be N/A or NA
+    } else if (!validRights.includes(rightsVal) && !isNAValue(rightsVal)) {
       getOrCreateFlaggedRecord(i).reasons.push(`Rights Type must be RF, RM, RFe, or n/a, but is "${rightsVal}".`);
     }
 
@@ -497,10 +673,16 @@ export const validateData = (
     const ackVal = String(row[columnIndices.ackColIndex] ?? '').trim();
     if (!ackVal) {
       getOrCreateFlaggedRecord(i).reasons.push('Acknowledgement is required.');
+    } else if (isNewNotFromParent && isNAValue(ackVal)) {
+      // Valid: For images marked as "New" and not sourced from parent titles, Acknowledgement can be N/A or NA
     } else {
       const isSameAsSource = ackVal.toLowerCase() === sourceVal.toLowerCase();
       if (isSameAsSource) {
-        getOrCreateFlaggedRecord(i).reasons.push(`[WARNING] No known photographer/creator specified. Acknowledgement matches Source ("${sourceVal}") without a slash.`);
+        if (sourceVal.toUpperCase() === 'OUP' || ackVal.toUpperCase() === 'OUP') {
+          getOrCreateFlaggedRecord(i).reasons.push(`[WARNING] No known photographer/creator specified. Acknowledgement matches Source ("OUP") without photographer/creator name.`);
+        } else {
+          getOrCreateFlaggedRecord(i).reasons.push(`[WARNING] No known photographer/creator specified. Acknowledgement matches Source ("${sourceVal}") without a slash.`);
+        }
       } else if (!ackVal.includes('/')) {
         getOrCreateFlaggedRecord(i).reasons.push(`Acknowledgement "${ackVal}" should contain a slash "/" separating the credit from the source.`);
       } else {
@@ -532,6 +714,31 @@ export const validateData = (
         }
       }
 
+      // Cover index sequencing and cover position checks:
+      if (pageInfo.isCover) {
+        if (pageInfo.coverType === 'front') {
+          // If (n) is explicitly specified or implied, check for gaps in cover numbering:
+          // Like CVR(1), CVR(2), CVR(3)...
+          if (pageInfo.coverIndex > lastFrontCoverIndex) {
+            if (pageInfo.coverIndex > lastFrontCoverIndex + 1 && lastFrontCoverIndex > 0) {
+              getOrCreateFlaggedRecord(i).reasons.push(
+                `Cover index sequence gap: Found "${pageVal}" (index ${pageInfo.coverIndex}), but expected index ${lastFrontCoverIndex + 1}. Cover indices must increment in order (e.g. CVR(1), CVR(2), CVR(3)).`
+              );
+            }
+            lastFrontCoverIndex = pageInfo.coverIndex;
+          }
+        } else if (pageInfo.coverType === 'back') {
+          if (pageInfo.coverIndex > lastBackCoverIndex) {
+            if (pageInfo.coverIndex > lastBackCoverIndex + 1 && lastBackCoverIndex > 0) {
+              getOrCreateFlaggedRecord(i).reasons.push(
+                `Back cover index sequence gap: Found "${pageVal}" (index ${pageInfo.coverIndex}), but expected index ${lastBackCoverIndex + 1}. Back cover indices must increment in order (e.g. Back CVR(1), Back CVR(2)).`
+              );
+            }
+            lastBackCoverIndex = pageInfo.coverIndex;
+          }
+        }
+      }
+
       // Order check: CVR / CVR(n) must precede normal pages, and sequence must be non-decreasing
       if (prevPageStr !== '') {
         if (comparePageValues(prevPageStr, pageVal) > 0) {
@@ -542,7 +749,6 @@ export const validateData = (
     }
 
     // Notes classification & relationship flags
-    const notesVal = columnIndices.notesColIndex !== undefined ? String(row[columnIndices.notesColIndex] ?? '').trim() : '';
     const cleanNote = notesVal.replace(/\s+/g, ' ').trim();
     const lowerNote = cleanNote.toLowerCase();
 
@@ -556,6 +762,8 @@ export const validateData = (
     const twoPartNote = parseTwoPartNote(notesVal);
     const hasTwoPartNote = !!(twoPartNote && twoPartNote.outcome);
 
+    const hasPickupTitleNote = !!pickupTitleNote;
+
     // 9. Photolog Creation (£)
     if (columnIndices.photologColIndex !== undefined) {
       const photologVal = String(row[columnIndices.photologColIndex] ?? '').trim();
@@ -568,7 +776,7 @@ export const validateData = (
     // 10. Status recleared (£)
     if (columnIndices.statusReclearedColIndex !== undefined) {
       const statusReclearedVal = String(row[columnIndices.statusReclearedColIndex] ?? '').trim();
-      if (hasZeroFeeNote) {
+      if (hasZeroFeeNote || hasPickupTitleNote) {
         if (statusReclearedVal !== '' && statusReclearedVal !== '0') {
           const numRecleared = parseFloat(statusReclearedVal);
           if (isNaN(numRecleared) || numRecleared !== 0) {
@@ -586,7 +794,7 @@ export const validateData = (
     // 11. Selections made (£)
     if (columnIndices.selectionsMadeColIndex !== undefined) {
       const selectionsVal = String(row[columnIndices.selectionsMadeColIndex] ?? '').trim();
-      if (hasZeroFeeNote) {
+      if (hasZeroFeeNote || hasPickupTitleNote) {
         if (selectionsVal !== '' && selectionsVal !== '0') {
           const numSelections = parseFloat(selectionsVal);
           if (isNaN(numSelections) || numSelections !== 0) {
@@ -686,7 +894,44 @@ export const validateData = (
       }
     }
 
-    // 14. Two-Part Notes Relationship Checks
+    // 14. Pickup from Title Notes Relationship Checks
+    if (pickupTitleNote) {
+      const cleanUsage = usageVal.toLowerCase().replace(/[\s-]/g, '');
+      const parentLabel = pickupTitleNote.parentTitle ? `"${pickupTitleNote.parentTitle}"` : 'parent title';
+
+      // (A) Usage Classification Validation
+      // If replaced in parent title -> "New/No License"
+      // If not replaced (no action required, licensed in parent, etc.) -> "Pickup/No License"
+      if (pickupTitleNote.isReplacedInParent) {
+        if (cleanUsage !== 'new/nolicense') {
+          getOrCreateFlaggedRecord(i).reasons.push(
+            `Note discrepancy: Note indicates image was replaced in parent title (${parentLabel}), so Usage Classification must be "New/No License", but found "${usageVal || 'blank'}".`
+          );
+        }
+      } else {
+        if (cleanUsage !== 'pickup/nolicense') {
+          getOrCreateFlaggedRecord(i).reasons.push(
+            `Note discrepancy: Note indicates image is a pick-up from parent title (${parentLabel}) with no replacement, so Usage Classification must be "Pickup/No License", but found "${usageVal || 'blank'}".`
+          );
+        }
+      }
+
+      // (B) License Fee Cost Column Check
+      // All cases are no-license; fee must be blank or 0
+      if (columnIndices.feeColIndex !== undefined) {
+        const feeVal = String(row[columnIndices.feeColIndex] ?? '').trim();
+        if (feeVal !== '' && feeVal !== '0') {
+          const numFee = parseFloat(feeVal.replace(/[^0-9.-]/g, ''));
+          if (!isNaN(numFee) && numFee !== 0) {
+            getOrCreateFlaggedRecord(i).reasons.push(
+              `Note discrepancy: Note indicates Pick-up from parent title requires No License, so License Fee must be blank or 0, but found "${feeVal}".`
+            );
+          }
+        }
+      }
+    }
+
+    // 15. Two-Part Notes Relationship Checks
     if (twoPartNote && twoPartNote.outcome) {
       const statusReclearedVal = columnIndices.statusReclearedColIndex !== undefined ? String(row[columnIndices.statusReclearedColIndex] ?? '').trim() : '';
       const selectionsVal = columnIndices.selectionsMadeColIndex !== undefined ? String(row[columnIndices.selectionsMadeColIndex] ?? '').trim() : '';

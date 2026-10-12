@@ -507,7 +507,7 @@ const App: React.FC = () => {
     setIsDownloadingSorted(false);
     setIsDownloadingOriginal(false);
     setIsDownloadingAll(false);
-    setIsInfoPanelOpen(true);
+    setIsInfoPanelOpen(false);
     setIsEditModalOpen(false);
     setActiveView('credits');
     setHeaderRowIndex(-1);
@@ -571,6 +571,7 @@ const App: React.FC = () => {
     setOriginalRecords([]);
     setRawData([]);
     setActiveView('uploadedLog');
+    setIsInfoPanelOpen(false);
 
     try {
       const processed = await processExcelFile(file);
@@ -613,6 +614,7 @@ const App: React.FC = () => {
     setOriginalRecords([]);
     setRawData([]);
     setActiveView('uploadedLog');
+    setIsInfoPanelOpen(false);
 
     try {
       const rawMatrix = parsePastedTextToMatrix(pastedText);
@@ -660,6 +662,7 @@ const App: React.FC = () => {
     setOriginalRecords([]);
     setRawData([]);
     setActiveView('uploadedLog');
+    setIsInfoPanelOpen(false);
 
     try {
       const response = await fetch('/api/fetch-online-excel', {
