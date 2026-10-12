@@ -25,6 +25,8 @@ import { BmsValidation } from './components/BmsValidation';
 import { CsExtractor } from './components/CsExtractor';
 import { HeaderVerificationModal } from './components/HeaderVerificationModal';
 import { UploadDiagnosticCard } from './components/UploadDiagnosticCard';
+import { ParentTitleAuditView } from './components/ParentTitleAuditView';
+import { type ParentTitleLog, type ParentCrossAuditSummary, crossAuditWithParentLogs } from './services/parentLogMatcher';
 import type { 
   AcknowledgementRecord, 
   AppStatus, 
@@ -206,6 +208,42 @@ const App: React.FC = () => {
   const [isNavExpanded, setIsNavExpanded] = useState<boolean>(false);
   const [showClearConfirm, setShowClearConfirm] = useState<boolean>(false);
 
+  // Parent Title Logs State
+  const [parentLogs, setParentLogs] = useState<ParentTitleLog[]>(() => {
+    try {
+      const saved = localStorage.getItem('assessment_log_parent_logs_v1');
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (e) {}
+    return [];
+  });
+
+  // Save parentLogs to localStorage
+  React.useEffect(() => {
+    try {
+      localStorage.setItem('assessment_log_parent_logs_v1', JSON.stringify(parentLogs));
+    } catch (e) {
+      console.warn('Failed to save parent logs to storage:', e);
+    }
+  }, [parentLogs]);
+
+  const handleAddParentLog = useCallback((log: ParentTitleLog) => {
+    setParentLogs(prev => [...prev.filter(p => p.id !== log.id), log]);
+  }, []);
+
+  const handleRemoveParentLog = useCallback((logId: string) => {
+    setParentLogs(prev => prev.filter(p => p.id !== logId));
+  }, []);
+
+  // Compute Parent Cross-Audit Summary
+  const parentAuditSummary = useMemo<ParentCrossAuditSummary | null>(() => {
+    if (!rawData || rawData.length === 0 || headerRowIndex === -1 || !columnIndices) {
+      return null;
+    }
+    return crossAuditWithParentLogs(rawData, headerRowIndex, columnIndices, parentLogs);
+  }, [rawData, headerRowIndex, columnIndices, parentLogs]);
+
   // Header Verification & Diagnostic State
   const [pendingUploadData, setPendingUploadData] = useState<ProcessedExcelData | null>(null);
   const [isHeaderVerificationOpen, setIsHeaderVerificationOpen] = useState<boolean>(false);
@@ -223,7 +261,7 @@ const App: React.FC = () => {
       if (fileTitle) setTitle(fileTitle);
       setOriginalRecordCount(allRecords.length);
 
-      const validationFlags = validateData(updatedRawData, headerRowIndex, columnIndices);
+      const validationFlags = validateData(updatedRawData, headerRowIndex, columnIndices, parentLogs);
       setRawValidationFlags(validationFlags);
 
       const coverRecords = allRecords.filter(r => isCoverPage(r.pageNumber));
@@ -525,7 +563,7 @@ const App: React.FC = () => {
     setHeaderRowIndex(data.headerRowIndex);
     setColumnIndices(data.columnIndices);
 
-    const validationFlags = validateData(data.rawData, data.headerRowIndex, data.columnIndices);
+    const validationFlags = validateData(data.rawData, data.headerRowIndex, data.columnIndices, parentLogs);
     setRawValidationFlags(validationFlags);
 
     setOriginalRecords(data.records);
@@ -1421,7 +1459,29 @@ const App: React.FC = () => {
                       });
                     }}
                     onOpenInfoPanel={() => setIsInfoPanelOpen(true)}
+                    parentAudit={parentAuditSummary}
                   />
+                )}
+
+                {activeView === 'parentAudit' && (
+                  <div className="flex-1 min-h-0 overflow-auto bg-white border border-slate-200 rounded-xl shadow-2xs">
+                    <ParentTitleAuditView
+                      parentLogs={parentLogs}
+                      onAddParentLog={handleAddParentLog}
+                      onRemoveParentLog={handleRemoveParentLog}
+                      auditSummary={parentAuditSummary}
+                      childFileName={fileName}
+                      onInspectChildRow={(rowNum) => {
+                        setActiveView('uploadedLog');
+                      }}
+                      onReaudit={() => {
+                        if (rawData && headerRowIndex !== -1 && columnIndices) {
+                          const validationFlags = validateData(rawData, headerRowIndex, columnIndices, parentLogs);
+                          setRawValidationFlags(validationFlags);
+                        }
+                      }}
+                    />
+                  </div>
                 )}
 
                 {activeView === 'dataHealth' && (

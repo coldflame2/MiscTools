@@ -191,6 +191,15 @@ export const VALIDATION_RULES: ValidationRuleDef[] = [
     severity: 'warning',
     defaultEnabled: true,
   },
+  {
+    id: 'parent_cross_verification',
+    name: 'Parent Title Log Cross-Verification',
+    shortDesc: 'Cross-verifies pickup rows against uploaded parent title logs for metadata discrepancies.',
+    fullDescription: 'Checks images sourced from parent titles against the uploaded parent title photologs. Flags unmatched assets, mismatched agency sources, divergent rights types, or inconsistent creator acknowledgements.',
+    category: 'Consistency',
+    severity: 'warning',
+    defaultEnabled: true,
+  },
 ];
 
 export const ALL_RULE_IDS = VALIDATION_RULES.map(r => r.id);
@@ -226,6 +235,7 @@ export const getRuleIdForReason = (reason: string): string => {
   if (clean.includes('License fee')) return 'license_fee_vendor_rates';
   if (clean.includes('Photo Research') || clean.includes('TinEye') || clean.includes('Reverse Research')) return 'two_part_notes_research';
   if (clean.includes('Note indicates') || clean.includes('Note discrepancy')) return 'zero_fee_notes';
+  if (clean.includes('Parent Log discrepancy') || clean.includes('Parent Log:') || clean.includes('Parent Title Cross-Match')) return 'parent_cross_verification';
   if (clean.includes('Image Used Too Many Times') || clean.includes('Ambiguous Pair') || clean.includes('Inconsistent Pair')) return 'frequency_and_pairs';
 
   return 'other_rules';

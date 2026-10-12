@@ -1,4 +1,5 @@
 import type { AIFlaggedRecord, HeaderIndices } from '../types';
+import { type ParentTitleLog, crossAuditWithParentLogs } from './parentLogMatcher';
 
 export const isIgnoredLastRow = (row: (string | number)[]): boolean => {
   if (!Array.isArray(row)) return false;
@@ -501,7 +502,8 @@ export const comparePageValues = (a: any, b: any): number => {
 export const validateData = (
   rawData: (string | number)[][],
   headerRowIndex: number,
-  columnIndices: HeaderIndices
+  columnIndices: HeaderIndices,
+  parentLogs: ParentTitleLog[] = []
 ): AIFlaggedRecord[] => {
   type TempFlaggedRecord = AIFlaggedRecord & { reasons: string[] };
   const recordsMap = new Map<number, TempFlaggedRecord>();
@@ -1068,6 +1070,19 @@ export const validateData = (
         }
       }
     }
+  }
+
+  // 16. Parent Title Log Cross-Validation (if parent logs are uploaded)
+  if (parentLogs && parentLogs.length > 0) {
+    const parentAudit = crossAuditWithParentLogs(rawData, headerRowIndex, columnIndices, parentLogs);
+    parentAudit.results.forEach(res => {
+      if (!res.isVerified && res.discrepancies.length > 0) {
+        const flagRecord = getOrCreateFlaggedRecord(res.childRowIndex);
+        res.discrepancies.forEach(disc => {
+          flagRecord.reasons.push(`[WARNING] Parent Log discrepancy: ${disc}`);
+        });
+      }
+    });
   }
 
   const finalFlags: AIFlaggedRecord[] = [];

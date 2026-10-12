@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import type { HeaderIndices, AIFlaggedRecord } from '../types';
+import type { ParentCrossAuditSummary } from '../services/parentLogMatcher';
 import { 
   VALIDATION_RULES, 
   getRulesForReasons, 
@@ -69,6 +70,8 @@ export interface SavedColumnSettings {
   orderedHeaderKeys?: string[];
   colWidthPreset?: 'tight' | 'normal' | 'wide' | 'fit' | 'custom';
   isWrapEnabled?: boolean;
+  columnWrapByHeader?: Record<string, boolean>;
+  columnWrapByIndex?: Record<number, boolean>;
 }
 
 export const normalizeHeaderKey = (header: string): string => {
@@ -135,6 +138,7 @@ interface UploadedLogViewProps {
   onDisableRules?: (ruleIds: string[]) => void;
   onToggleRule?: (ruleId: string) => void;
   onOpenInfoPanel?: () => void;
+  parentAudit?: ParentCrossAuditSummary | null;
 }
 
 export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
@@ -147,6 +151,7 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
   onDisableRules,
   onToggleRule,
   onOpenInfoPanel,
+  parentAudit,
 }) => {
   // Column visibility & ordering
   const [isColumnManagerOpen, setIsColumnManagerOpen] = useState(false);
@@ -162,9 +167,43 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
   });
   const [resizingCol, setResizingCol] = useState<{ index: number; startX: number; startWidth: number } | null>(null);
 
-  // Row Wrapping & Height Customization
+  // Row Wrapping & Height Customization - Per-column and global
+  // Helper to determine if a column is a Description column
+  const isDescriptionCol = useCallback((headerName: string, letter?: string) => {
+    const norm = normalizeHeaderKey(headerName);
+    return norm.includes('desc') || norm.includes('description') || (letter === 'C' && norm.includes('desc'));
+  }, []);
+
+  // Compute default wrap for any column: Description false, all others true
+  const computeInitialColumnWrap = useCallback((columns: ColumnMeta[]): Record<number, boolean> => {
+    const saved = loadSavedColumnSettings();
+    const wrapMap: Record<number, boolean> = {};
+
+    columns.forEach(col => {
+      const canonicalKey = getCanonicalHeaderKey(col.headerName);
+      const normKey = normalizeHeaderKey(col.headerName);
+
+      if (saved?.columnWrapByHeader && saved.columnWrapByHeader[canonicalKey] !== undefined) {
+        wrapMap[col.index] = saved.columnWrapByHeader[canonicalKey];
+      } else if (saved?.columnWrapByHeader && saved.columnWrapByHeader[normKey] !== undefined) {
+        wrapMap[col.index] = saved.columnWrapByHeader[normKey];
+      } else if (saved?.columnWrapByIndex && saved.columnWrapByIndex[col.index] !== undefined) {
+        wrapMap[col.index] = saved.columnWrapByIndex[col.index];
+      } else {
+        // Default rule: Description wrap disabled (false), every other column wrap enabled (true)
+        const isDesc = isDescriptionCol(col.headerName, col.letter);
+        wrapMap[col.index] = !isDesc;
+      }
+    });
+
+    return wrapMap;
+  }, [isDescriptionCol]);
+
+  // Per-column wrap state: record of colIndex -> boolean
+  const [columnWrapSettings, setColumnWrapSettings] = useState<Record<number, boolean>>({});
+
   const [isWrapEnabled, setIsWrapEnabled] = useState<boolean>(() => {
-    return savedSettingsOnMount?.isWrapEnabled ?? false;
+    return savedSettingsOnMount?.isWrapEnabled ?? true;
   });
   const [fontSize, setFontSize] = useState<FontSize>('medium');
   const [zebraStriping, setZebraStriping] = useState(true);
@@ -173,7 +212,7 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
 
   // Sorting, Filtering & Search
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'issues' | 'errors' | 'warnings'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'issues' | 'errors' | 'warnings' | 'parent_pickups' | 'parent_verified' | 'parent_mismatch'>('all');
   const [sortConfig, setSortConfig] = useState<SortConfig>({ colIndex: null, direction: null });
   const [jumpRowInput, setJumpRowInput] = useState('');
 
@@ -226,6 +265,17 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
     });
     return map;
   }, [dataValidationFlags]);
+
+  // Parent audit lookup map by child originalRowIndex
+  const parentAuditResultMap = useMemo(() => {
+    const map = new Map<number, import('../services/parentLogMatcher').ParentCrossMatchResult>();
+    if (parentAudit && parentAudit.results) {
+      parentAudit.results.forEach(res => {
+        map.set(res.childRowIndex, res);
+      });
+    }
+    return map;
+  }, [parentAudit]);
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
@@ -457,10 +507,12 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
 
     const initialOrder = computeColumnOrder(allColumns);
     const initialWidths = computeColumnWidths(allColumns);
+    const initialWraps = computeInitialColumnWrap(allColumns);
     const saved = loadSavedColumnSettings();
 
     setColumnOrder(initialOrder);
     setColumnWidths(initialWidths);
+    setColumnWrapSettings(initialWraps);
     if (saved?.colWidthPreset) {
       setColWidthPreset(saved.colWidthPreset);
     }
@@ -475,15 +527,16 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
       isSyncingFromDataRef.current = false;
     }, 100);
     return () => clearTimeout(timer);
-  }, [allColumns, computeColumnOrder, computeColumnWidths]);
+  }, [allColumns, computeColumnOrder, computeColumnWidths, computeInitialColumnWrap]);
 
-  // Persist column widths & visibility settings to localStorage whenever changed
+  // Persist column widths, wrap & visibility settings to localStorage whenever changed
   const persistCurrentSettings = useCallback((
     currentWidths: Record<number, number>,
     currentOrder: number[],
     currentCols: ColumnMeta[],
     currentPreset?: 'tight' | 'normal' | 'wide' | 'fit' | 'custom',
-    currentWrap?: boolean
+    currentWrap?: boolean,
+    currentColumnWraps?: Record<number, boolean>
   ) => {
     if (!currentCols || currentCols.length === 0 || !currentOrder || currentOrder.length === 0) return;
 
@@ -493,7 +546,9 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
       widthsByIndex: {},
       visibilityByHeader: {},
       visibilityByLetter: {},
-      orderedHeaderKeys: []
+      orderedHeaderKeys: [],
+      columnWrapByHeader: {},
+      columnWrapByIndex: {}
     };
 
     const widthsByHeader = { ...existing.widthsByHeader };
@@ -501,6 +556,8 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
     const widthsByIndex = { ...existing.widthsByIndex };
     const visibilityByHeader = { ...existing.visibilityByHeader };
     const visibilityByLetter = { ...existing.visibilityByLetter };
+    const columnWrapByHeader = { ...(existing.columnWrapByHeader || {}) };
+    const columnWrapByIndex = { ...(existing.columnWrapByIndex || {}) };
 
     const visibleSet = new Set(currentOrder);
 
@@ -515,6 +572,11 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
         widthsByHeader[canonicalKey] = currentWidths[col.index];
         widthsByLetter[col.letter] = currentWidths[col.index];
         widthsByIndex[col.index] = currentWidths[col.index];
+      }
+
+      if (currentColumnWraps && currentColumnWraps[col.index] !== undefined) {
+        columnWrapByHeader[canonicalKey] = currentColumnWraps[col.index];
+        columnWrapByIndex[col.index] = currentColumnWraps[col.index];
       }
     });
 
@@ -531,7 +593,9 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
       visibilityByLetter,
       orderedHeaderKeys,
       colWidthPreset: currentPreset,
-      isWrapEnabled: currentWrap
+      isWrapEnabled: currentWrap,
+      columnWrapByHeader,
+      columnWrapByIndex
     });
   }, []);
 
@@ -539,8 +603,8 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
     if (isSyncingFromDataRef.current) return;
     if (!allColumns || allColumns.length === 0 || columnOrder.length === 0) return;
 
-    persistCurrentSettings(columnWidths, columnOrder, allColumns, colWidthPreset, isWrapEnabled);
-  }, [columnWidths, columnOrder, allColumns, colWidthPreset, isWrapEnabled, persistCurrentSettings]);
+    persistCurrentSettings(columnWidths, columnOrder, allColumns, colWidthPreset, isWrapEnabled, columnWrapSettings);
+  }, [columnWidths, columnOrder, allColumns, colWidthPreset, isWrapEnabled, columnWrapSettings, persistCurrentSettings]);
 
   const visibleColumnSet = useMemo(() => new Set(columnOrder), [columnOrder]);
 
@@ -569,13 +633,18 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
   const filteredRows = useMemo(() => {
     let result = allDataRows;
 
-    // Filter by issue status
+    // Filter by issue status or parent match status
     if (statusFilter !== 'all') {
       result = result.filter(rowObj => {
         const val = validationMap.get(rowObj.originalRowIndex);
+        const pMatch = parentAuditResultMap.get(rowObj.originalRowIndex);
+
         if (statusFilter === 'issues') return !!val && (val.isError || val.isWarning);
         if (statusFilter === 'errors') return !!val && val.isError;
         if (statusFilter === 'warnings') return !!val && !val.isError && val.isWarning;
+        if (statusFilter === 'parent_pickups') return !!pMatch;
+        if (statusFilter === 'parent_verified') return !!pMatch && pMatch.isVerified;
+        if (statusFilter === 'parent_mismatch') return !!pMatch && (!pMatch.isVerified || pMatch.matchConfidence === 'unmatched');
         return true;
       });
     }
@@ -921,16 +990,59 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
     });
   };
 
+  // Per-column wrap helper
+  const isColWrapped = useCallback((colIndex: number): boolean => {
+    if (columnWrapSettings[colIndex] !== undefined) {
+      return columnWrapSettings[colIndex];
+    }
+    const col = allColumns.find(c => c.index === colIndex);
+    if (col) {
+      return !isDescriptionCol(col.headerName, col.letter);
+    }
+    return true;
+  }, [columnWrapSettings, allColumns, isDescriptionCol]);
+
+  // Toggle wrap on/off for a specific column
+  const handleToggleColumnWrap = useCallback((colIndex: number) => {
+    setColumnWrapSettings(prev => {
+      const current = prev[colIndex] !== undefined ? prev[colIndex] : isColWrapped(colIndex);
+      const next = !current;
+      const col = allColumns.find(c => c.index === colIndex);
+      const colName = col ? `${col.headerName} (${col.letter})` : `Column ${colIndex}`;
+      showToast(`${colName} wrap turned ${next ? 'ON' : 'OFF'}`);
+      return {
+        ...prev,
+        [colIndex]: next
+      };
+    });
+  }, [allColumns, isColWrapped, showToast]);
+
+  // Bulk enable/disable wrap for all visible columns
+  const handleSetAllColumnsWrap = useCallback((enabled: boolean) => {
+    const updated: Record<number, boolean> = {};
+    allColumns.forEach(c => {
+      updated[c.index] = enabled;
+    });
+    setColumnWrapSettings(updated);
+    showToast(`All columns wrap turned ${enabled ? 'ON' : 'OFF'}`);
+  }, [allColumns, showToast]);
+
+  // Check if any visible column has wrap turned on
+  const hasAnyVisibleColumnWrapped = useMemo(() => {
+    return orderedVisibleColumns.some(col => isColWrapped(col.index));
+  }, [orderedVisibleColumns, isColWrapped]);
+
   // Density classes for rows and cells
   const getDensityRowClasses = () => {
-    if (isWrapEnabled) {
+    if (hasAnyVisibleColumnWrapped) {
       return 'min-h-[40px] py-1.5 leading-normal';
     }
     return 'h-9 max-h-9 leading-9';
   };
 
-  const getDensityCellClasses = () => {
-    if (isWrapEnabled) {
+  const getCellWrapClasses = (colIndex: number) => {
+    const wrapped = isColWrapped(colIndex);
+    if (wrapped) {
       return 'whitespace-normal break-words py-0.5';
     }
     return 'whitespace-nowrap overflow-hidden text-ellipsis';
@@ -1035,6 +1147,32 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
                 </span>
               )}
             </button>
+
+            {/* Parent match filter buttons if parent audit is active */}
+            {parentAudit && parentAudit.pickupRowsCount > 0 && (
+              <>
+                <button
+                  onClick={() => setStatusFilter('parent_pickups')}
+                  className={`px-2 py-1 text-xs font-medium rounded-md transition-colors flex items-center gap-1 ${
+                    statusFilter === 'parent_pickups' ? 'bg-indigo-600 text-white shadow-2xs font-semibold' : 'text-indigo-700 hover:bg-indigo-50'
+                  }`}
+                  title="Filter to rows sourced from parent titles"
+                >
+                  <span>📚 Pickups ({parentAudit.pickupRowsCount})</span>
+                </button>
+                {parentAudit.discrepanciesCount > 0 && (
+                  <button
+                    onClick={() => setStatusFilter('parent_mismatch')}
+                    className={`px-2 py-1 text-xs font-medium rounded-md transition-colors flex items-center gap-1 ${
+                      statusFilter === 'parent_mismatch' ? 'bg-amber-600 text-white shadow-2xs font-semibold' : 'text-amber-800 hover:bg-amber-50'
+                    }`}
+                    title="Filter to parent pickup rows with metadata discrepancies"
+                  >
+                    <span>⚠️ Mismatches ({parentAudit.discrepanciesCount})</span>
+                  </button>
+                )}
+              </>
+            )}
           </div>
 
           <div className="h-4 w-px bg-slate-200" />
@@ -1093,19 +1231,19 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
             </button>
           </div>
 
-          {/* Dedicated Wrap Toggle Button */}
+          {/* Wrap Controls: Indicator & Toggle All Columns */}
           <button
-            onClick={() => setIsWrapEnabled(prev => !prev)}
+            onClick={() => handleSetAllColumnsWrap(!hasAnyVisibleColumnWrapped)}
             className={`px-2.5 py-1 text-xs font-medium rounded-lg border transition-colors flex items-center gap-1.5 shadow-2xs ${
-              isWrapEnabled
+              hasAnyVisibleColumnWrapped
                 ? 'bg-blue-600 text-white border-blue-600 font-semibold shadow-xs'
                 : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
             }`}
-            title={isWrapEnabled ? "Wrap is ON: Click to disable text wrapping" : "Wrap is OFF: Click to enable text wrapping"}
+            title={hasAnyVisibleColumnWrapped ? "Column wrapping is active. Click to turn off wrapping for all columns" : "Column wrapping is off. Click to turn on wrapping for all columns"}
           >
             <WrapText className="w-3.5 h-3.5" />
-            <span>Wrap</span>
-            {isWrapEnabled && <span className="w-1.5 h-1.5 rounded-full bg-white ml-0.5" />}
+            <span>Wrap ({orderedVisibleColumns.filter(c => isColWrapped(c.index)).length}/{orderedVisibleColumns.length})</span>
+            {hasAnyVisibleColumnWrapped && <span className="w-1.5 h-1.5 rounded-full bg-white ml-0.5" />}
           </button>
         </div>
 
@@ -1400,6 +1538,20 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
                     </span>
                   </label>
 
+                  {/* Per-Column Wrap Toggle */}
+                  <button
+                    onClick={() => handleToggleColumnWrap(col.index)}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border transition-colors flex items-center gap-1 shrink-0 ${
+                      isColWrapped(col.index)
+                        ? 'bg-blue-100 text-blue-800 border-blue-300 hover:bg-blue-200'
+                        : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200 hover:text-slate-700'
+                    }`}
+                    title={isColWrapped(col.index) ? "Wrap is ON: Click to disable text wrapping for this column" : "Wrap is OFF: Click to enable text wrapping for this column"}
+                  >
+                    <WrapText className="w-2.5 h-2.5" />
+                    <span>{isColWrapped(col.index) ? 'Wrap' : 'No-wrap'}</span>
+                  </button>
+
                   {/* Reorder arrows if column is currently visible */}
                   {isChecked && (
                     <div className="flex items-center gap-0.5 shrink-0 opacity-60 hover:opacity-100">
@@ -1678,6 +1830,23 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
                                   <MoveRight className="w-3.5 h-3.5 text-slate-400" />
                                   <span>Move Right</span>
                                 </button>
+                                <button
+                                  onClick={() => {
+                                    handleToggleColumnWrap(col.index);
+                                    setActiveHeaderMenu(null);
+                                  }}
+                                  className={`w-full text-left px-3 py-1.5 hover:bg-slate-100 flex items-center justify-between text-slate-700 ${
+                                    isColWrapped(col.index) ? 'bg-blue-50/50 text-blue-900 font-medium' : ''
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <WrapText className={`w-3.5 h-3.5 ${isColWrapped(col.index) ? 'text-blue-600' : 'text-slate-400'}`} />
+                                    <span>{isColWrapped(col.index) ? 'Disable Wrap' : 'Enable Wrap'}</span>
+                                  </div>
+                                  {isColWrapped(col.index) && (
+                                    <span className="text-[10px] font-bold text-blue-600 bg-blue-100 px-1.5 py-0.2 rounded-full">ON</span>
+                                  )}
+                                </button>
                                 <div className="my-1 border-t border-slate-100" />
                                 <button
                                   onClick={() => handleHideColumn(col.index)}
@@ -1751,7 +1920,6 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
                   }
 
                   const rowHeightClass = getDensityRowClasses();
-                  const cellTextClass = getDensityCellClasses();
 
                   return (
                     <tr
@@ -1792,6 +1960,7 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
                         const displayStr = cellVal !== undefined && cellVal !== null ? String(cellVal).trim() : '';
                         const isSelected = selectedCell?.rowIdx === rowObj.originalRowIndex && selectedCell?.colIdx === col.index;
                         const isFirstFrozen = freezeFirstCol && idx === 0;
+                        const cellWrapClass = getCellWrapClasses(col.index);
 
                         return (
                           <td
@@ -1818,7 +1987,7 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
                             style={{ width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }}
                             title={displayStr}
                           >
-                            <div className={`${cellTextClass} overflow-hidden`}>
+                            <div className={`${cellWrapClass} overflow-hidden`}>
                               {displayStr ? (
                                 searchQuery.trim() && displayStr.toLowerCase().includes(searchQuery.toLowerCase()) ? (
                                   <span>
@@ -2140,6 +2309,7 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
           hasPrev={currentDisplayIndex > 0}
           hasNext={currentDisplayIndex < filteredRows.length - 1}
           validationInfo={validationMap.get(inspectedRow.originalRowIndex)}
+          parentMatchResult={parentAuditResultMap.get(inspectedRow.originalRowIndex)}
         />
       )}
     </div>

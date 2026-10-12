@@ -115,6 +115,13 @@ export const NavigationRail: React.FC<NavigationRailProps> = ({
                         badgeCount={dataValidationIssues}
                     />
                     <NavItem 
+                        icon={<span className="text-base select-none">📚</span>} 
+                        label="Parent Match" 
+                        isExpanded={isExpanded} 
+                        isActive={activeView === 'parentAudit'} 
+                        onClick={() => onNavigate('parentAudit')} 
+                    />
+                    <NavItem 
                         icon={<ChartBarIcon className="w-5 h-5 flex-shrink-0" />} 
                         label="Analysis" 
                         isExpanded={isExpanded} 

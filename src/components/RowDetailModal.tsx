@@ -26,6 +26,7 @@ interface RowDetailModalProps {
     isWarning: boolean;
     reasons: string[];
   };
+  parentMatchResult?: import('../services/parentLogMatcher').ParentCrossMatchResult | null;
 }
 
 export const RowDetailModal: React.FC<RowDetailModalProps> = ({
@@ -39,7 +40,8 @@ export const RowDetailModal: React.FC<RowDetailModalProps> = ({
   onNextRow,
   hasPrev,
   hasNext,
-  validationInfo
+  validationInfo,
+  parentMatchResult
 }) => {
   const [copiedColIndex, setCopiedColIndex] = React.useState<number | null>(null);
   const [copiedAll, setCopiedAll] = React.useState(false);
@@ -187,7 +189,63 @@ export const RowDetailModal: React.FC<RowDetailModalProps> = ({
           </div>
         )}
 
-        {/* Field List */}
+        {/* Parent Title Match & Discrepancy Box if available */}
+        {parentMatchResult && (
+          <div className={`px-5 py-3 border-b text-xs ${
+            parentMatchResult.isVerified 
+              ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950' 
+              : parentMatchResult.matchConfidence === 'unmatched'
+                ? 'bg-red-50/70 border-red-200 text-red-950'
+                : 'bg-amber-50/80 border-amber-200 text-amber-950'
+          }`}>
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-center gap-2">
+                <span className="font-bold flex items-center gap-1.5">
+                  📚 Parent Title Match:
+                  <span className="text-slate-800 font-semibold">{parentMatchResult.parentTitle || 'Parent Log'}</span>
+                </span>
+                {parentMatchResult.parentExcelRow && (
+                  <span className="font-mono text-[11px] bg-white px-1.5 py-0.2 rounded border border-slate-200">
+                    Parent Row #{parentMatchResult.parentExcelRow}
+                  </span>
+                )}
+              </div>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
+                parentMatchResult.isVerified 
+                  ? 'bg-emerald-100 text-emerald-800' 
+                  : parentMatchResult.matchConfidence === 'unmatched'
+                    ? 'bg-red-100 text-red-800'
+                    : 'bg-amber-100 text-amber-800'
+              }`}>
+                {parentMatchResult.isVerified ? 'VERIFIED MATCH' : parentMatchResult.matchConfidence === 'unmatched' ? 'UNMATCHED IN PARENT' : 'METADATA DISCREPANCY'}
+              </span>
+            </div>
+
+            {parentMatchResult.discrepancies.length > 0 && (
+              <div className="mt-2 bg-white/80 p-2.5 rounded-lg border border-amber-200">
+                <span className="font-bold text-[11px] text-amber-950 block mb-1">Discrepancy Details:</span>
+                <ul className="list-disc list-inside space-y-0.5 text-[11px] text-amber-900">
+                  {parentMatchResult.discrepancies.map((d, i) => (
+                    <li key={i}>{d}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {parentMatchResult.comparisons.length > 0 && (
+              <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {parentMatchResult.comparisons.map((c, i) => (
+                  <div key={i} className={`p-1.5 rounded border text-[11px] ${c.isMatch ? 'bg-white border-slate-200' : 'bg-amber-100 border-amber-300 font-semibold'}`}>
+                    <div className="text-[10px] text-slate-500 font-sans">{c.label}</div>
+                    <div className="truncate font-mono mt-0.5 text-slate-800" title={`Child: ${c.childValue} | Parent: ${c.parentValue}`}>
+                      {c.childValue || '—'} {c.isMatch ? '✓' : `≠ ${c.parentValue || '—'}`}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <div className="overflow-y-auto p-5 space-y-2.5 flex-1 bg-slate-50/50">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
             {columns.map(col => {

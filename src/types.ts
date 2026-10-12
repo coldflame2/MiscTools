@@ -41,7 +41,7 @@ export interface AcknowledgementRecord {
 export type AppStatus = 'idle' | 'processing' | 'success' | 'error';
 export type AIAnalysisStatus = 'idle' | 'running' | 'completed' | 'error' | 'skipped';
 
-export type ActiveView = 'credits' | 'uploadedLog' | 'dataHealth' | 'analysis' | 'history' | 'export';
+export type ActiveView = 'credits' | 'uploadedLog' | 'dataHealth' | 'parentAudit' | 'analysis' | 'history' | 'export';
 
 export type AIFlaggedRecord = AcknowledgementRecord & {
   reason: string;
