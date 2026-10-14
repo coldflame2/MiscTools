@@ -51,7 +51,7 @@ export interface ParentCrossMatchResult {
   parentFee?: string;
   parentNotes?: string;
 
-  matchConfidence: 'exact_id' | 'page_and_id' | 'page_only' | 'id_fuzzy' | 'unmatched';
+  matchConfidence: 'id_and_desc' | 'exact_id' | 'page_and_id' | 'page_and_desc' | 'page_only' | 'id_fuzzy' | 'unmatched';
   isVerified: boolean;
   discrepancies: string[];
   comparisons: ParentMatchComparison[];
@@ -104,6 +104,72 @@ export const normalizePageCode = (page: string): string => {
     return numMatch[1];
   }
   return clean.replace(/[\s()]/g, '');
+};
+
+/**
+ * Checks if an asset ID is generic/placeholder (e.g. N/A, NA, None, unknown, -, empty)
+ * Multiple assets often share N/A (especially OUP owned assets), so these must NEVER be matched on ID alone.
+ */
+export const isGenericAssetId = (id: string): boolean => {
+  if (!id) return true;
+  const clean = id.trim().toLowerCase();
+  return (
+    clean === 'n/a' ||
+    clean === 'na' ||
+    clean === 'none' ||
+    clean === 'null' ||
+    clean === 'nil' ||
+    clean === '-' ||
+    clean === '--' ||
+    clean === 'unknown' ||
+    clean === 'tbc' ||
+    clean === 'tbd'
+  );
+};
+
+/**
+ * Normalizes description text for comparison (strips punctuation, common stop words, collapses whitespace)
+ */
+export const normalizeDescriptionText = (desc: string): string => {
+  if (!desc) return '';
+  return desc
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+/**
+ * Calculates token overlap similarity between child and parent descriptions (0.0 to 1.0)
+ */
+export const calculateDescriptionSimilarity = (descA: string, descB: string): number => {
+  const normA = normalizeDescriptionText(descA);
+  const normB = normalizeDescriptionText(descB);
+  if (!normA && !normB) return 1.0;
+  if (!normA || !normB) return 0.0;
+  if (normA === normB) return 1.0;
+
+  // If one is substantial substring of the other
+  if (normA.includes(normB) || normB.includes(normA)) {
+    const minLen = Math.min(normA.length, normB.length);
+    const maxLen = Math.max(normA.length, normB.length);
+    if (minLen >= 10 && minLen / maxLen > 0.4) {
+      return 0.9;
+    }
+  }
+
+  const wordsA = new Set(normA.split(' ').filter(w => w.length > 2));
+  const wordsB = new Set(normB.split(' ').filter(w => w.length > 2));
+
+  if (wordsA.size === 0 || wordsB.size === 0) return 0.0;
+
+  let common = 0;
+  wordsA.forEach(w => {
+    if (wordsB.has(w)) common++;
+  });
+
+  const union = new Set([...wordsA, ...wordsB]).size;
+  return union > 0 ? common / union : 0.0;
 };
 
 /**
@@ -189,37 +255,61 @@ export const crossAuditWithParentLogs = (
   // Map parent logs with indexes by:
   // 1. Parent log ID
   // 2. Normalized Title
-  // 3. Asset ID -> records
-  // 4. Page code -> records
+  // 3. Asset ID -> records list (multiple records can share the same ID like N/A)
+  // 4. Page code -> records list
+  // 5. Direct access to all records in log
+  interface IndexedParentLogEntry {
+    record: AcknowledgementRecord;
+    rowIndex: number;
+    excelRow: number;
+    normId: string;
+    normDesc: string;
+    normPage: string;
+  }
+
   interface IndexedParentLog {
     log: ParentTitleLog;
-    byAssetId: Map<string, { record: AcknowledgementRecord; rowIndex: number; excelRow: number }>;
-    byPageCode: Map<string, { record: AcknowledgementRecord; rowIndex: number; excelRow: number }[]>;
+    entries: IndexedParentLogEntry[];
+    byAssetId: Map<string, IndexedParentLogEntry[]>;
+    byPageCode: Map<string, IndexedParentLogEntry[]>;
   }
 
   const indexedParents: IndexedParentLog[] = parentLogs.map(pLog => {
-    const byAssetId = new Map<string, { record: AcknowledgementRecord; rowIndex: number; excelRow: number }>();
-    const byPageCode = new Map<string, { record: AcknowledgementRecord; rowIndex: number; excelRow: number }[]>();
+    const entries: IndexedParentLogEntry[] = [];
+    const byAssetId = new Map<string, IndexedParentLogEntry[]>();
+    const byPageCode = new Map<string, IndexedParentLogEntry[]>();
 
     pLog.records.forEach((rec, idx) => {
       const excelRow = pLog.headerRowIndex + 2 + idx;
-      if (rec.libraryImageNo) {
-        const normId = normalizeAssetId(rec.libraryImageNo);
-        if (normId && !byAssetId.has(normId)) {
-          byAssetId.set(normId, { record: rec, rowIndex: rec.originalRowIndex ?? idx, excelRow });
-        }
+      const normId = normalizeAssetId(rec.libraryImageNo || '');
+      const normDesc = normalizeDescriptionText(rec.description || '');
+      const normPage = normalizePageCode(rec.pageNumber || '');
+
+      const entry: IndexedParentLogEntry = {
+        record: rec,
+        rowIndex: rec.originalRowIndex ?? idx,
+        excelRow,
+        normId,
+        normDesc,
+        normPage
+      };
+
+      entries.push(entry);
+
+      if (normId) {
+        const idList = byAssetId.get(normId) || [];
+        idList.push(entry);
+        byAssetId.set(normId, idList);
       }
-      if (rec.pageNumber) {
-        const normPg = normalizePageCode(rec.pageNumber);
-        if (normPg) {
-          const list = byPageCode.get(normPg) || [];
-          list.push({ record: rec, rowIndex: rec.originalRowIndex ?? idx, excelRow });
-          byPageCode.set(normPg, list);
-        }
+
+      if (normPage) {
+        const pgList = byPageCode.get(normPage) || [];
+        pgList.push(entry);
+        byPageCode.set(normPage, pgList);
       }
     });
 
-    return { log: pLog, byAssetId, byPageCode };
+    return { log: pLog, entries, byAssetId, byPageCode };
   });
 
   // Iterate child rows
@@ -273,53 +363,114 @@ export const crossAuditWithParentLogs = (
       record: AcknowledgementRecord;
       excelRow: number;
       rowIndex: number;
-      confidence: 'exact_id' | 'page_and_id' | 'page_only' | 'id_fuzzy' | 'unmatched';
+      confidence: 'id_and_desc' | 'exact_id' | 'page_and_id' | 'page_and_desc' | 'page_only' | 'id_fuzzy' | 'unmatched';
     } | null = null;
 
     const childNormAssetId = normalizeAssetId(imgNoVal);
     const childNormPage = normalizePageCode(pickupNote?.parentPage || pageVal);
+    const childNormDesc = normalizeDescriptionText(descVal);
+    const isChildGenericId = isGenericAssetId(imgNoVal);
 
     for (const pIdx of candidateParents) {
-      // Strategy 1: Exact Asset ID match
-      if (childNormAssetId && pIdx.byAssetId.has(childNormAssetId)) {
-        const found = pIdx.byAssetId.get(childNormAssetId)!;
-        matchedParentEntry = {
-          parentLog: pIdx.log,
-          record: found.record,
-          excelRow: found.excelRow,
-          rowIndex: found.rowIndex,
-          confidence: 'exact_id'
-        };
-        break;
+      // -----------------------------------------------------------------------
+      // Strategy 1: ID + Description Match
+      // Assets are matched using ID + Description (never ID alone), preventing incorrect
+      // matches when generic IDs like N/A, NA, etc. are shared by multiple OUP-owned or other assets.
+      // -----------------------------------------------------------------------
+      if (childNormAssetId && !isChildGenericId && pIdx.byAssetId.has(childNormAssetId)) {
+        const idMatches = pIdx.byAssetId.get(childNormAssetId)!;
+
+        // If child has description, find candidate with description agreement (similarity >= 0.20 or substring)
+        if (childNormDesc) {
+          let bestEntry: typeof idMatches[0] | null = null;
+          let bestSim = -1;
+
+          for (const cand of idMatches) {
+            const sim = calculateDescriptionSimilarity(descVal, cand.record.description || '');
+            if (sim > bestSim) {
+              bestSim = sim;
+              bestEntry = cand;
+            }
+          }
+
+          // Must have description compatibility or candidate description also empty/matches
+          if (bestEntry && (bestSim >= 0.18 || !bestEntry.normDesc)) {
+            matchedParentEntry = {
+              parentLog: pIdx.log,
+              record: bestEntry.record,
+              excelRow: bestEntry.excelRow,
+              rowIndex: bestEntry.rowIndex,
+              confidence: 'id_and_desc'
+            };
+            break;
+          }
+        } else if (idMatches.length === 1 && !idMatches[0].normDesc) {
+          // Both have no description but unique non-generic ID
+          matchedParentEntry = {
+            parentLog: pIdx.log,
+            record: idMatches[0].record,
+            excelRow: idMatches[0].excelRow,
+            rowIndex: idMatches[0].rowIndex,
+            confidence: 'id_and_desc'
+          };
+          break;
+        }
       }
 
-      // Strategy 2: Page match in parent + description/source heuristic
-      if (childNormPage && pIdx.byPageCode.has(childNormPage)) {
-        const candidateRecords = pIdx.byPageCode.get(childNormPage)!;
-        if (candidateRecords.length === 1) {
-          matchedParentEntry = {
-            parentLog: pIdx.log,
-            record: candidateRecords[0].record,
-            excelRow: candidateRecords[0].excelRow,
-            rowIndex: candidateRecords[0].rowIndex,
-            confidence: 'page_only'
-          };
-          break;
-        } else if (candidateRecords.length > 1) {
-          // Find closest matching record by source or description
-          const bestMatch = candidateRecords.find(c => {
-            const sameSource = c.record.source && sourceVal && standardizeAgency(c.record.source).toLowerCase() === standardizeAgency(sourceVal).toLowerCase();
-            return sameSource;
-          }) || candidateRecords[0];
+      // -----------------------------------------------------------------------
+      // Strategy 2: For Generic ID assets (N/A, NA, OUP owned) or missing IDs, or ID without desc match:
+      // Match with Description + Page or Description similarity. NEVER match with ID alone!
+      // -----------------------------------------------------------------------
+      if (!matchedParentEntry) {
+        // (A) Check candidate page in parent + description match
+        if (childNormPage && pIdx.byPageCode.has(childNormPage)) {
+          const pageCandidates = pIdx.byPageCode.get(childNormPage)!;
+          let bestPageMatch: typeof pageCandidates[0] | null = null;
+          let maxSim = -1;
 
-          matchedParentEntry = {
-            parentLog: pIdx.log,
-            record: bestMatch.record,
-            excelRow: bestMatch.excelRow,
-            rowIndex: bestMatch.rowIndex,
-            confidence: 'page_only'
-          };
-          break;
+          for (const cand of pageCandidates) {
+            const sim = calculateDescriptionSimilarity(descVal, cand.record.description || '');
+            if (sim > maxSim) {
+              maxSim = sim;
+              bestPageMatch = cand;
+            }
+          }
+
+          if (bestPageMatch && (maxSim >= 0.20 || (!childNormDesc && !bestPageMatch.normDesc))) {
+            matchedParentEntry = {
+              parentLog: pIdx.log,
+              record: bestPageMatch.record,
+              excelRow: bestPageMatch.excelRow,
+              rowIndex: bestPageMatch.rowIndex,
+              confidence: 'page_and_desc'
+            };
+            break;
+          }
+        }
+
+        // (B) Global Description Match within parent title (if description is distinctive >= 8 chars)
+        if (childNormDesc && childNormDesc.length >= 6) {
+          let bestGlobalEntry: typeof pIdx.entries[0] | null = null;
+          let highestSim = 0.35; // Must have good word overlap
+
+          for (const cand of pIdx.entries) {
+            const sim = calculateDescriptionSimilarity(descVal, cand.record.description || '');
+            if (sim > highestSim) {
+              highestSim = sim;
+              bestGlobalEntry = cand;
+            }
+          }
+
+          if (bestGlobalEntry) {
+            matchedParentEntry = {
+              parentLog: pIdx.log,
+              record: bestGlobalEntry.record,
+              excelRow: bestGlobalEntry.excelRow,
+              rowIndex: bestGlobalEntry.rowIndex,
+              confidence: 'id_and_desc'
+            };
+            break;
+          }
         }
       }
     }

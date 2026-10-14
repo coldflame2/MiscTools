@@ -535,6 +535,7 @@ const App: React.FC = () => {
     setOriginalRecordCount(0);
     setOriginalRecords([]);
     setRawData([]);
+    setParentLogs([]); // Clear parent logs
     setContactSheetStatus('idle');
     setImageAnalysisResults([]);
     setContactSheetError(null);
@@ -555,6 +556,7 @@ const App: React.FC = () => {
     setIsHeaderVerificationOpen(false);
     try {
       localStorage.removeItem('assessment_log_helper_state_v1');
+      localStorage.removeItem('assessment_log_parent_logs_v1');
     } catch (e) {}
   };
 
@@ -1373,11 +1375,11 @@ const App: React.FC = () => {
               {/* Main content column with header at top beside drawer */}
               <div className="flex-1 min-w-0 flex flex-col min-h-0 overflow-hidden">
                 <header className="mb-2 flex items-center justify-between flex-shrink-0 h-9">
-                  <div className="flex items-center gap-2">
-                    <h1 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight">Log review</h1>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <h1 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight shrink-0">Log review</h1>
                     {(isbn || title || fileName) && (
                       <span 
-                        className="hidden sm:inline-flex items-center gap-1 text-xs text-slate-500 font-medium border-l border-slate-300 pl-2 ml-0.5 truncate max-w-sm lg:max-w-md" 
+                        className="hidden sm:inline-flex items-center gap-1 text-xs text-slate-500 font-medium border-l border-slate-300 pl-2 ml-0.5 truncate max-w-xs lg:max-w-sm" 
                         title={`${isbn ? `${isbn} — ` : ''}${title || fileName || ''}`}
                       >
                         {isbn && <span className="font-semibold text-slate-700">{isbn}</span>}
@@ -1385,8 +1387,25 @@ const App: React.FC = () => {
                         {(title || fileName) && <span className="truncate">{title || fileName}</span>}
                       </span>
                     )}
+
+                    {/* Parent Titles in the same row */}
+                    {parentLogs.length > 0 && (
+                      <div className="hidden md:flex items-center gap-1 pl-2 border-l border-slate-300 min-w-0">
+                        <span className="text-[11px] font-semibold text-indigo-700 shrink-0">Parent:</span>
+                        {parentLogs.map(p => (
+                          <span 
+                            key={p.id}
+                            className="inline-flex items-center gap-1 bg-indigo-50 border border-indigo-200 text-indigo-900 px-1.5 py-0.5 rounded text-[11px] font-medium max-w-[150px] truncate"
+                            title={`Parent Log: ${p.title || p.fileName} (${p.records.length} records)`}
+                          >
+                            <span className="truncate">{p.title || p.fileName}</span>
+                            <span className="text-[10px] text-indigo-500 font-mono">({p.records.length})</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 shrink-0">
                     {contactSheetStatus === 'success' && imageAnalysisResults.length > 0 && (
                       <button
                         onClick={handleMergeAndDownload}
@@ -1716,9 +1735,9 @@ const App: React.FC = () => {
                       <Trash2 className="w-5 h-5 text-red-600" />
                     </div>
                     <div>
-                      <h3 className="font-semibold text-slate-900 text-base">Clear Uploaded Log?</h3>
+                      <h3 className="font-semibold text-slate-900 text-base">Clear Uploaded Logs?</h3>
                       <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                        Are you sure you want to remove the current log? All parsed records, validations, and edits will be cleared, returning to the upload screen.
+                        Are you sure you want to clear the logs? Both the current child log and all uploaded parent logs, validations, and edits will be removed, returning to the upload screen.
                       </p>
                     </div>
                   </div>
