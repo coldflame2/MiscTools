@@ -15,11 +15,12 @@ export interface GridColumnDef<T = any> {
   maxWidth?: number;
   pinned?: 'left' | 'right' | false;
   hidden?: boolean;
-  cell?: (info: { row: T; value: any; rowIndex: number; colIndex: number; isSelected?: boolean }) => ReactNode;
+  cell?: (info: { row: T; value: any; rowIndex: number; colIndex: number; isSelected?: boolean; isWrapped?: boolean }) => ReactNode;
   headerTooltip?: string;
   enableSorting?: boolean;
   enableFiltering?: boolean;
   enableResizing?: boolean;
+  defaultWrap?: boolean;
   align?: 'left' | 'center' | 'right';
   className?: string;
 }
@@ -31,6 +32,7 @@ export interface StoredGridSettings {
   pinnedColumns: { left: string[]; right: string[] };
   density: GridDensity;
   isWrapText: boolean;
+  columnWraps?: Record<string, boolean>;
   sorting: { id: string; desc: boolean }[];
   filters: Record<string, ColumnFilterValue>;
 }

@@ -309,7 +309,7 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
           const val = row.data[col.index];
           return val !== null && val !== undefined ? String(val) : '';
         },
-        cell: ({ row, value }) => {
+        cell: ({ row, value, isWrapped }) => {
           const strVal = String(value ?? '');
           const valInfo = validationMap.get(row.originalRowIndex);
           const pMatch = parentAuditResultMap.get(row.originalRowIndex);
@@ -346,7 +346,7 @@ export const UploadedLogView: React.FC<UploadedLogViewProps> = ({
                 </div>
               )}
 
-              <span className="truncate flex-1" title={strVal}>
+              <span className={isWrapped ? "whitespace-normal break-words leading-tight py-1 flex-1" : "truncate flex-1"} title={strVal}>
                 {strVal || <span className="text-slate-300">-</span>}
               </span>
             </div>

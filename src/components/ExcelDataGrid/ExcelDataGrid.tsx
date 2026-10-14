@@ -124,11 +124,25 @@ export function ExcelDataGrid<T = any>({
   });
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Per-column wrap state (overrides or supplements global wrap text)
+  const [columnWraps, setColumnWraps] = useState<Record<string, boolean>>(() => {
+    if (savedSettings?.columnWraps) {
+      return savedSettings.columnWraps;
+    }
+    const initial: Record<string, boolean> = {};
+    userColumns.forEach(c => {
+      if (c.defaultWrap !== undefined) {
+        initial[c.id] = c.defaultWrap;
+      }
+    });
+    return initial;
+  });
+
   // Active cell & row selection (for arrow-key navigation)
   const [selectedCell, setSelectedCell] = useState<{ rowIndex: number; colId: string } | null>(null);
 
-  // Header menu popup state
-  const [activeMenuColId, setActiveMenuColId] = useState<string | null>(null);
+  // Header menu popup state (with trigger button coordinates for viewport-boundary placement)
+  const [activeMenu, setActiveMenu] = useState<{ colId: string; x: number; y: number } | null>(null);
 
   // Column resizing state
   const [resizingCol, setResizingCol] = useState<{ colId: string; startX: number; startWidth: number } | null>(null);
@@ -169,6 +183,7 @@ export function ExcelDataGrid<T = any>({
       pinnedColumns,
       density,
       isWrapText,
+      columnWraps,
       sorting,
       filters: columnFilters,
     };
@@ -177,7 +192,7 @@ export function ExcelDataGrid<T = any>({
     } catch (e) {
       console.warn('Failed to save grid settings', e);
     }
-  }, [columnWidths, columnOrder, hiddenColumns, pinnedColumns, density, isWrapText, sorting, columnFilters, storageKey]);
+  }, [columnWidths, columnOrder, hiddenColumns, pinnedColumns, density, isWrapText, columnWraps, sorting, columnFilters, storageKey]);
 
   // Unique values map for pick-from-values filtering
   const uniqueValuesByColumn = useMemo(() => {
@@ -456,6 +471,11 @@ export function ExcelDataGrid<T = any>({
     
     setDensity('compact');
     setIsWrapText(false);
+    const initialWraps: Record<string, boolean> = {};
+    userColumns.forEach(c => {
+      if (c.defaultWrap !== undefined) initialWraps[c.id] = c.defaultWrap;
+    });
+    setColumnWraps(initialWraps);
     setSorting([]);
     setColumnFilters({});
     setSearchQuery('');
@@ -633,8 +653,18 @@ export function ExcelDataGrid<T = any>({
         onSearchChange={setSearchQuery}
         density={density}
         onDensityChange={setDensity}
-        isWrapText={isWrapText}
-        onToggleWrapText={() => setIsWrapText(prev => !prev)}
+        isWrapText={isWrapText || Object.values(columnWraps).some(Boolean)}
+        onToggleWrapText={() => {
+          const isCurrentlyWrapped = isWrapText || Object.values(columnWraps).some(Boolean);
+          if (isCurrentlyWrapped) {
+            setIsWrapText(false);
+            setColumnWraps({});
+            showToast('Turned off text wrapping for all columns');
+          } else {
+            setIsWrapText(true);
+            showToast('Turned on text wrapping for all columns');
+          }
+        }}
         columns={userColumns}
         columnOrder={columnOrder}
         hiddenColumns={hiddenColumns}
@@ -796,58 +826,24 @@ export function ExcelDataGrid<T = any>({
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          setActiveMenuColId(prev => prev === col.id ? null : col.id);
+                          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                          const menuWidth = 260;
+                          const viewportWidth = window.innerWidth;
+                          let x = rect.left;
+                          // If menu overflows the right edge or button is near the right edge:
+                          if (rect.right + menuWidth > viewportWidth - 16 || rect.left + menuWidth > viewportWidth - 16) {
+                            x = Math.max(12, rect.right - menuWidth);
+                          }
+                          const y = rect.bottom + 4;
+                          setActiveMenu(prev => prev?.colId === col.id ? null : { colId: col.id, x, y });
                         }}
                         className={`p-1 rounded hover:bg-slate-200/80 text-slate-400 hover:text-slate-700 cursor-pointer transition-opacity ${
-                          activeMenuColId === col.id ? 'opacity-100 text-blue-600 bg-blue-50' : 'opacity-0 group-hover:opacity-100'
+                          activeMenu?.colId === col.id ? 'opacity-100 text-blue-600 bg-blue-50' : 'opacity-0 group-hover:opacity-100'
                         }`}
                         title="Column options"
                       >
                         <MoreVertical className="w-3.5 h-3.5" />
                       </button>
-
-                      {/* Header Popover Menu */}
-                      {activeMenuColId === col.id && (
-                        <HeaderMenu
-                          columnDef={col}
-                          isSortedAsc={isSortedAsc}
-                          isSortedDesc={isSortedDesc}
-                          isPinnedLeft={isPinnedLeft}
-                          isPinnedRight={isPinnedRight}
-                          activeFilter={columnFilters[col.id]}
-                          uniqueValues={uniqueValuesByColumn.get(col.id)}
-                          onSort={(desc) => {
-                            if (desc === null) {
-                              setSorting(prev => prev.filter(s => s.id !== col.id));
-                            } else {
-                              setSorting([{ id: col.id, desc }]);
-                            }
-                          }}
-                          onPin={(pos) => {
-                            setPinnedColumns(prev => {
-                              const left = prev.left.filter(id => id !== col.id);
-                              const right = prev.right.filter(id => id !== col.id);
-                              if (pos === 'left') left.push(col.id);
-                              else if (pos === 'right') right.push(col.id);
-                              return { left, right };
-                            });
-                          }}
-                          onAutoFit={() => handleAutoFitColumn(col.id)}
-                          onHide={() => {
-                            setHiddenColumns(prev => new Set([...prev, col.id]));
-                            showToast(`Hidden "${col.header}"`);
-                          }}
-                          onSetFilter={(val) => {
-                            setColumnFilters(prev => {
-                              const next = { ...prev };
-                              if (!val) delete next[col.id];
-                              else next[col.id] = val;
-                              return next;
-                            });
-                          }}
-                          onClose={() => setActiveMenuColId(null)}
-                        />
-                      )}
                     </div>
 
                     {/* Column Resizing Handle */}
@@ -903,8 +899,7 @@ export function ExcelDataGrid<T = any>({
                       isSelectedRow ? 'bg-blue-50/70 font-medium' : 'bg-white'
                     } ${customRowClass}`}
                     style={{
-                      height: `${rowHeight}px`,
-                      lineHeight: `${rowHeight}px`,
+                      minHeight: `${rowHeight}px`,
                     }}
                   >
                     {/* Row Number Cell */}
@@ -926,6 +921,7 @@ export function ExcelDataGrid<T = any>({
                       const stickyRight = isPinnedRight ? pinnedOffsets.rightOffsets[col.id] : undefined;
 
                       const isSelectedCell = selectedCell?.rowIndex === rowIndex && selectedCell?.colId === col.id;
+                      const isColWrapped = columnWraps[col.id] ?? isWrapText;
 
                       let cellValue: any = '';
                       if (col.accessorFn) {
@@ -978,9 +974,10 @@ export function ExcelDataGrid<T = any>({
                               rowIndex,
                               colIndex: colIdx,
                               isSelected: isSelectedCell,
+                              isWrapped: isColWrapped,
                             })
                           ) : (
-                            <span className={isWrapText ? 'line-clamp-2 leading-tight py-0.5' : 'truncate w-full block'}>
+                            <span className={isColWrapped ? 'whitespace-normal break-words leading-tight py-1' : 'truncate w-full block'}>
                               {stringVal || <span className="text-slate-300">-</span>}
                             </span>
                           )}
@@ -994,6 +991,70 @@ export function ExcelDataGrid<T = any>({
           </div>
         )}
       </div>
+
+      {/* Header Popover Menu - Positioned with fixed coordinates to prevent any clipping or horizontal scroll */}
+      {activeMenu && (() => {
+        const targetCol = visibleOrderedColumns.find(c => c.id === activeMenu.colId);
+        if (!targetCol) return null;
+        const isPinnedLeft = pinnedColumns.left.includes(targetCol.id);
+        const isPinnedRight = pinnedColumns.right.includes(targetCol.id);
+        const sortState = sorting.find(s => s.id === targetCol.id);
+        const isSortedAsc = sortState ? !sortState.desc : false;
+        const isSortedDesc = sortState ? sortState.desc : false;
+        const isColWrapped = columnWraps[targetCol.id] ?? isWrapText;
+
+        return (
+          <HeaderMenu
+            columnDef={targetCol}
+            isSortedAsc={isSortedAsc}
+            isSortedDesc={isSortedDesc}
+            isPinnedLeft={isPinnedLeft}
+            isPinnedRight={isPinnedRight}
+            isWrapped={isColWrapped}
+            position={{ x: activeMenu.x, y: activeMenu.y }}
+            activeFilter={columnFilters[targetCol.id]}
+            uniqueValues={uniqueValuesByColumn.get(targetCol.id)}
+            onSort={(desc) => {
+              if (desc === null) {
+                setSorting(prev => prev.filter(s => s.id !== targetCol.id));
+              } else {
+                setSorting([{ id: targetCol.id, desc }]);
+              }
+            }}
+            onPin={(pos) => {
+              setPinnedColumns(prev => {
+                const left = prev.left.filter(id => id !== targetCol.id);
+                const right = prev.right.filter(id => id !== targetCol.id);
+                if (pos === 'left') left.push(targetCol.id);
+                else if (pos === 'right') right.push(targetCol.id);
+                return { left, right };
+              });
+            }}
+            onToggleWrap={() => {
+              const next = !isColWrapped;
+              setColumnWraps(prev => ({
+                ...prev,
+                [targetCol.id]: next,
+              }));
+              showToast(`${next ? 'Enabled' : 'Disabled'} text wrapping for "${targetCol.header}"`);
+            }}
+            onAutoFit={() => handleAutoFitColumn(targetCol.id)}
+            onHide={() => {
+              setHiddenColumns(prev => new Set([...prev, targetCol.id]));
+              showToast(`Hidden "${targetCol.header}"`);
+            }}
+            onSetFilter={(val) => {
+              setColumnFilters(prev => {
+                const next = { ...prev };
+                if (!val) delete next[targetCol.id];
+                else next[targetCol.id] = val;
+                return next;
+              });
+            }}
+            onClose={() => setActiveMenu(null)}
+          />
+        );
+      })()}
 
       {/* Right Click Context Menu */}
       {contextMenu && (

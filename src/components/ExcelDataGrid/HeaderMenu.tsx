@@ -1,7 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { 
   ArrowUp, ArrowDown, Pin, PinOff, EyeOff, Sparkles, Filter, 
-  RotateCcw, Check, Search, X 
+  RotateCcw, Check, Search, X, WrapText 
 } from 'lucide-react';
 import type { GridColumnDef, ColumnFilterValue } from './types';
 
@@ -11,10 +11,13 @@ interface HeaderMenuProps {
   isSortedDesc: boolean;
   isPinnedLeft: boolean;
   isPinnedRight: boolean;
+  isWrapped: boolean;
   activeFilter?: ColumnFilterValue;
   uniqueValues?: string[];
+  position?: { x: number; y: number };
   onSort: (desc: boolean | null) => void;
   onPin: (position: 'left' | 'right' | false) => void;
+  onToggleWrap: () => void;
   onAutoFit: () => void;
   onHide: () => void;
   onSetFilter: (filter: ColumnFilterValue | null) => void;
@@ -27,10 +30,13 @@ export const HeaderMenu: React.FC<HeaderMenuProps> = ({
   isSortedDesc,
   isPinnedLeft,
   isPinnedRight,
+  isWrapped,
   activeFilter,
   uniqueValues = [],
+  position,
   onSort,
   onPin,
+  onToggleWrap,
   onAutoFit,
   onHide,
   onSetFilter,
@@ -99,9 +105,64 @@ export const HeaderMenu: React.FC<HeaderMenuProps> = ({
     onClose();
   };
 
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [adjustedPos, setAdjustedPos] = useState<{ x: number; y: number } | null>(position || null);
+
+  useEffect(() => {
+    if (!position) return;
+    const updatePos = () => {
+      const menuWidth = 260; // w-64 is 256px + margin
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+
+      let x = position.x;
+      let y = position.y;
+
+      // Detect if menu overflows right side of viewport:
+      // If position.x + menuWidth > viewportWidth - 12, shift left so right edge fits on screen!
+      if (x + menuWidth > viewportWidth - 12) {
+        x = Math.max(12, viewportWidth - menuWidth - 12);
+      }
+      if (x < 12) {
+        x = 12;
+      }
+      if (y + 320 > viewportHeight - 12 && position.y > 320) {
+        y = Math.max(12, position.y - 320);
+      }
+      setAdjustedPos({ x, y });
+    };
+
+    updatePos();
+  }, [position]);
+
+  // Click outside and scroll listener
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    const handleScroll = (e: Event) => {
+      // Don't close if scrolling inside the menu list itself
+      if (menuRef.current && menuRef.current.contains(e.target as Node)) {
+        return;
+      }
+      onClose();
+    };
+
+    document.addEventListener('mousedown', handleOutsideClick);
+    window.addEventListener('scroll', handleScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+      window.removeEventListener('scroll', handleScroll, true);
+    };
+  }, [onClose]);
+
   return (
     <div 
-      className="absolute top-full mt-1 left-0 z-50 w-64 bg-white rounded-lg shadow-xl border border-slate-200 text-xs text-slate-700 py-1.5 animate-in fade-in zoom-in-95 duration-100"
+      ref={menuRef}
+      className={`${adjustedPos ? 'fixed' : 'absolute top-full mt-1 right-0'} z-50 w-64 bg-white rounded-lg shadow-xl border border-slate-200 text-xs text-slate-700 py-1.5 animate-in fade-in zoom-in-95 duration-100`}
+      style={adjustedPos ? { top: `${adjustedPos.y}px`, left: `${adjustedPos.x}px` } : undefined}
       onClick={(e) => e.stopPropagation()}
     >
       {tab === 'menu' ? (
@@ -165,6 +226,19 @@ export const HeaderMenu: React.FC<HeaderMenuProps> = ({
           </button>
 
           <div className="h-px bg-slate-100 my-1" />
+
+          {/* Wrap Column Text Control */}
+          <button
+            onClick={() => { onToggleWrap(); onClose(); }}
+            className={`w-full px-3 py-1.5 text-left flex items-center justify-between hover:bg-slate-50 transition-colors cursor-pointer ${isWrapped ? 'text-blue-600 font-medium bg-blue-50/50' : ''}`}
+            title="Toggle text wrapping for this column"
+          >
+            <div className="flex items-center gap-2">
+              <WrapText className="w-3.5 h-3.5 text-slate-400" />
+              <span>Wrap column text</span>
+            </div>
+            {isWrapped && <Check className="w-3.5 h-3.5 text-blue-600" />}
+          </button>
 
           {/* Auto-Fit */}
           <button
